@@ -7,6 +7,8 @@ It is a native Windows desktop application: a single, self-contained `.exe`, wit
 - support for the **latest versions** of the game (26.x and the new `dimensions/` folder);
 - very broad **entity** support.
 
+The interface is available in **English** (default), **French**, **Spanish**, **German**, **Portuguese** and **Italian**, selectable from the top bar.
+
 ## Download
 
 The latest version is available on the [Releases](https://github.com/SkyNigh1/mc-exporter/releases/latest) page. Download `mc-exporter.exe` and run it; there is nothing to install.
@@ -173,7 +175,7 @@ Dimensions are read from the game's model classes, textures from your installed 
 | OBJ groups | `g` instead of `o` (Maya compatible) |
 | Textures | PNG export, ×1 to ×16 upscaling, alpha in separate files |
 
-Options and the last selection are remembered between sessions.
+Options, the interface language and the last selection are remembered between sessions.
 
 ---
 
@@ -228,7 +230,6 @@ The file `exemples/demo-entites.schem` contains one instance of every supported 
 - Entities are frozen in a rest pose: there is no animation.
 - Maps in item frames are not available for schematics, which do not contain map data.
 - Mod blocks are not rendered (only a checkerboard cube).
-- The user interface is in French.
 
 ---
 

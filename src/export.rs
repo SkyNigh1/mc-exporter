@@ -71,11 +71,11 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
     }
 
     // textures
-    prog.set_stage("Écriture des textures", mats.len());
+    prog.set_stage(&crate::i18n::t("Writing textures"), mats.len());
     let mut has_alpha: HashMap<MatKey, bool> = HashMap::new();
     let mut avg: HashMap<MatKey, [f32; 3]> = HashMap::new();
     if opts.export_textures {
-        fs::create_dir_all(&tex_dir).with_context(|| format!("création de {}", tex_dir.display()))?;
+        fs::create_dir_all(&tex_dir).with_context(|| format!("creating {}", tex_dir.display()))?;
     }
     for m in &mats {
         let tname = reg.tex_name(m.tex);
@@ -132,7 +132,7 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
     // MTL
     let mtl_name = format!("{stem}.mtl");
     let mut mtl = String::new();
-    let _ = writeln!(mtl, "# Exporté par MC Exporter\n");
+    let _ = writeln!(mtl, "# Exported by MC Exporter\n");
     for m in &mats {
         let name = &names[m];
         let a = avg[m];
@@ -173,12 +173,12 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
         if opts.obj_per_chunk { (q.group, names[&q.mat].clone()) } else { ((0, 0), names[&q.mat].clone()) }
     });
 
-    prog.set_stage("Écriture de l'OBJ", order.len());
-    let f = fs::File::create(obj_path).with_context(|| format!("création de {}", obj_path.display()))?;
+    prog.set_stage(&crate::i18n::t("Writing OBJ"), order.len());
+    let f = fs::File::create(obj_path).with_context(|| format!("creating {}", obj_path.display()))?;
     let mut w = BufWriter::with_capacity(1 << 20, f);
-    writeln!(w, "# Exporté par MC Exporter")?;
-    writeln!(w, "# Monde : {world_name}")?;
-    writeln!(w, "# Sélection : x {}..{}  y {}..{}  z {}..{}", sel.x0, sel.x1, sel.y0, sel.y1, sel.z0, sel.z1)?;
+    writeln!(w, "# Exported by MC Exporter")?;
+    writeln!(w, "# World: {world_name}")?;
+    writeln!(w, "# Selection: x {}..{}  y {}..{}  z {}..{}", sel.x0, sel.x1, sel.y0, sel.y1, sel.z0, sel.z1)?;
     writeln!(w, "mtllib {mtl_name}")?;
 
     let mut vmap: HashMap<[i32; 3], usize> = HashMap::new();

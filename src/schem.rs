@@ -175,16 +175,16 @@ fn read_varints(data: &[u8], count: usize) -> Vec<u32> {
 }
 
 pub fn load(path: &Path, reg: &Registry) -> Result<Schematic> {
-    let raw = std::fs::read(path).with_context(|| format!("lecture de {}", path.display()))?;
+    let raw = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let data = if raw.starts_with(&[0x1f, 0x8b]) {
         let mut out = Vec::new();
-        flate2::read::GzDecoder::new(&raw[..]).read_to_end(&mut out).context("décompression gzip")?;
+        flate2::read::GzDecoder::new(&raw[..]).read_to_end(&mut out).context("gzip decompression")?;
         out
     } else {
         raw
     };
     let opts = fastnbt::DeOpts::new().max_seq_len(usize::MAX);
-    let root: Value = fastnbt::from_bytes_with_opts(&data, opts).context("fichier NBT illisible")?;
+    let root: Value = fastnbt::from_bytes_with_opts(&data, opts).context(crate::i18n::t("Unreadable NBT file"))?;
     let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
 
     let mut ex = Extra::default();
@@ -204,7 +204,7 @@ pub fn load(path: &Path, reg: &Registry) -> Result<Schematic> {
         }
     };
     if blocks.is_empty() {
-        bail!("le schematic ne contient aucun bloc");
+        bail!("{}", crate::i18n::t("The schematic contains no blocks"));
     }
     // move the minimum corner to (0, 0, 0)
     let min = blocks.iter().fold([i32::MAX; 3], |m, b| [m[0].min(b.0), m[1].min(b.1), m[2].min(b.2)]);
@@ -255,14 +255,14 @@ pub fn load(path: &Path, reg: &Registry) -> Result<Schematic> {
 
 fn sponge(s: &Value, reg: &Registry, ex: &mut Extra) -> Result<(String, Vec<(i32, i32, i32, u32)>)> {
     let version = int(get(s, "Version")).unwrap_or(1);
-    let w = int(get(s, "Width")).ok_or_else(|| anyhow!("Width manquant : format non reconnu"))? as i32 & 0xffff;
+    let w = int(get(s, "Width")).ok_or_else(|| anyhow!("missing Width: unrecognized format"))? as i32 & 0xffff;
     let h = int(get(s, "Height")).unwrap_or(0) as i32 & 0xffff;
     let l = int(get(s, "Length")).unwrap_or(0) as i32 & 0xffff;
     let (palette, data) = match get(s, "Blocks") {
         Some(b @ Value::Compound(_)) => (get(b, "Palette"), bytes(get(b, "Data"))),
         _ => (get(s, "Palette"), bytes(get(s, "BlockData"))),
     };
-    let Some(Value::Compound(pal)) = palette else { bail!("palette de blocs absente") };
+    let Some(Value::Compound(pal)) = palette else { bail!("missing block palette") };
     let mut ids = vec![0u32; pal.len().max(1)];
     let mut map: HashMap<u32, u32> = HashMap::new();
     for (k, v) in pal {
@@ -275,7 +275,7 @@ fn sponge(s: &Value, reg: &Registry, ex: &mut Extra) -> Result<(String, Vec<(i32
             }
         }
     }
-    let data = data.ok_or_else(|| anyhow!("données de blocs absentes"))?;
+    let data = data.ok_or_else(|| anyhow!("missing block data"))?;
     let n = (w * h * l) as usize;
     let vals = read_varints(&data, n);
     let mut out = Vec::new();
@@ -308,7 +308,7 @@ fn sponge(s: &Value, reg: &Registry, ex: &mut Extra) -> Result<(String, Vec<(i32
 }
 
 fn litematic(root: &Value, reg: &Registry, ex: &mut Extra) -> Result<(String, Vec<(i32, i32, i32, u32)>)> {
-    let Some(Value::Compound(regions)) = get(root, "Regions") else { bail!("Regions invalide") };
+    let Some(Value::Compound(regions)) = get(root, "Regions") else { bail!("invalid Regions") };
     let mut out = Vec::new();
     for (_, r) in regions {
         let pos = get(r, "Position");
@@ -386,7 +386,7 @@ fn structure(root: &Value, reg: &Registry, ex: &mut Extra) -> Result<(String, Ve
         },
     };
     let ids: Vec<u32> = pal.iter().map(|v| state_from_compound(v, reg)).collect();
-    let Some(Value::List(blocks)) = get(root, "blocks") else { bail!("liste de blocs absente") };
+    let Some(Value::List(blocks)) = get(root, "blocks") else { bail!("missing block list") };
     let mut out = Vec::new();
     for b in blocks {
         let Some(p) = ints(get(b, "pos")) else { continue };
@@ -410,7 +410,7 @@ fn structure(root: &Value, reg: &Registry, ex: &mut Extra) -> Result<(String, Ve
             }
         }
     }
-    Ok(("Structure vanilla (.nbt)".into(), out))
+    Ok(("vanilla structure (.nbt)".into(), out))
 }
 
 // ───────────────────────── legacy MCEdit format (numeric ids) ─────────────────────────
@@ -616,7 +616,7 @@ fn legacy(s: &Value, reg: &Registry, ex: &mut Extra) -> Result<(String, Vec<(i32
     let w = int(get(s, "Width")).unwrap_or(0) as i32 & 0xffff;
     let h = int(get(s, "Height")).unwrap_or(0) as i32 & 0xffff;
     let l = int(get(s, "Length")).unwrap_or(0) as i32 & 0xffff;
-    let blocks = bytes(get(s, "Blocks")).ok_or_else(|| anyhow!("Blocks absent"))?;
+    let blocks = bytes(get(s, "Blocks")).ok_or_else(|| anyhow!("missing Blocks"))?;
     let data = bytes(get(s, "Data")).unwrap_or_default();
     let add = bytes(get(s, "AddBlocks")).unwrap_or_default();
     let n = (w * h * l) as usize;
@@ -664,5 +664,5 @@ fn legacy(s: &Value, reg: &Registry, ex: &mut Extra) -> Result<(String, Vec<(i32
             ex.bes.push(((g("x"), g("y"), g("z")), v.clone()));
         }
     }
-    Ok(("MCEdit / WorldEdit ancien (.schematic)".into(), out))
+    Ok(("legacy MCEdit / WorldEdit (.schematic)".into(), out))
 }

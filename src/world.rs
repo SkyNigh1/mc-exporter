@@ -48,13 +48,13 @@ fn nbt_int(v: &fastnbt::Value) -> Option<i64> {
 impl WorldInfo {
     pub fn open(path: &Path) -> Result<WorldInfo> {
         let level = path.join("level.dat");
-        let raw = fs::read(&level).with_context(|| format!("level.dat introuvable dans {}", path.display()))?;
+        let raw = fs::read(&level).with_context(|| crate::i18n::tf("level.dat not found in {0}", &[&path.display()]))?;
         let mut data = Vec::new();
         flate2::read::GzDecoder::new(&raw[..])
             .read_to_end(&mut data)
-            .context("level.dat illisible (gzip)")?;
-        let root: fastnbt::Value = fastnbt::from_bytes(&data).context("level.dat illisible (NBT)")?;
-        let d = nbt_get(&root, "Data").ok_or_else(|| anyhow!("level.dat sans Data"))?;
+            .context("unreadable level.dat (gzip)")?;
+        let root: fastnbt::Value = fastnbt::from_bytes(&data).context("unreadable level.dat (NBT)")?;
+        let d = nbt_get(&root, "Data").ok_or_else(|| anyhow!("level.dat has no Data"))?;
 
         let name = match nbt_get(d, "LevelName") {
             Some(fastnbt::Value::String(s)) => s.clone(),

@@ -5,6 +5,7 @@ use crate::export;
 use crate::map::{RegionMap, render_region};
 use crate::mesh::{ExportOptions, OffsetMode, Progress, Selection, build_mesh};
 use crate::registry::Registry;
+use crate::i18n::{self, Lang, t, tf};
 use crate::schem;
 use crate::world::{self, Source, WorldInfo};
 use crossbeam_channel::{Receiver, unbounded};
@@ -27,6 +28,7 @@ struct Config {
     ceil: Option<i32>,
     sel: Option<[i32; 4]>,
     last_export: Option<PathBuf>,
+    lang: Lang,
 }
 
 fn config_path() -> PathBuf {
@@ -122,6 +124,7 @@ impl App {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
+        i18n::set(cfg.lang);
         let mc_dir = assets::minecraft_dir();
         let saves = world::list_saves(&mc_dir);
         let world_path = if cfg.world_path.is_empty() {
@@ -166,7 +169,7 @@ impl App {
             hover: None,
         };
         if app.jars.is_empty() {
-            app.status = "Aucune version de Minecraft trouvée dans .minecraft/versions : lance le jeu une fois ou choisis un jar dans les paramètres.".into();
+            app.status = t("No Minecraft version found in .minecraft/versions: launch the game once or pick a jar in the settings.");
         } else if std::path::Path::new(app.world_path.trim()).join("level.dat").is_file() {
             app.start_load();
         }
@@ -183,6 +186,7 @@ impl App {
             ceil: Some(self.ceil),
             sel: self.sel,
             last_export: self.last_export.clone(),
+            lang: i18n::current(),
         };
         let p = config_path();
         let _ = std::fs::create_dir_all(p.parent().unwrap());
@@ -220,8 +224,8 @@ impl App {
         let prev_key = self.loaded_assets_key.clone();
         let (tx, rx) = unbounded();
         self.status = match &target {
-            LoadTarget::World(_) => "Chargement du monde…".into(),
-            LoadTarget::Schem(p) => format!("Import de {}…", p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()),
+            LoadTarget::World(_) => t("Loading world…"),
+            LoadTarget::Schem(p) => tf("Importing {0}…", &[&p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()]),
         };
         std::thread::spawn(move || {
             let r = (|| -> Result<Loaded, String> {
@@ -237,7 +241,7 @@ impl App {
                         (None, Some(r)) => r.assets.jar_path.clone(),
                         _ => {
                             assets::pick_jar(&jars, version.as_deref())
-                                .ok_or("Aucun jar Minecraft trouvé (Paramètres → choisir un jar)")?
+                                .ok_or_else(|| t("No Minecraft jar found (Settings → pick a jar)"))?
                                 .path
                         }
                     },
@@ -318,15 +322,17 @@ impl App {
                     Ok(Loaded { info, reg, schem: Some(si) }) => {
                         let jar = reg.assets.jar_path.clone();
                         self.loaded_assets_key = Some((jar.clone(), self.packs.clone()));
-                        self.status = format!(
-                            "Schematic « {} » — {} — {} × {} × {} — {} blocs — ressources : {}",
-                            info.name,
-                            si.format,
-                            si.size[0],
-                            si.size[1],
-                            si.size[2],
-                            si.blocks,
-                            jar.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+                        self.status = tf(
+                            "Schematic “{0}” — {1} — {2} × {3} × {4} — {5} blocks — resources: {6}",
+                            &[
+                                &info.name,
+                                &si.format,
+                                &si.size[0],
+                                &si.size[1],
+                                &si.size[2],
+                                &si.blocks,
+                                &jar.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+                            ],
                         );
                         self.dim_idx = 0;
                         self.sel = Some([0, 0, si.size[0] - 1, si.size[2] - 1]);
@@ -342,11 +348,13 @@ impl App {
                     Ok(Loaded { info, reg, schem: None }) => {
                         let jar = reg.assets.jar_path.clone();
                         self.loaded_assets_key = Some((jar.clone(), self.packs.clone()));
-                        self.status = format!(
-                            "« {} » — Minecraft {} — ressources : {}",
-                            info.name,
-                            info.version_name.clone().unwrap_or("?".into()),
-                            jar.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+                        self.status = tf(
+                            "“{0}” — Minecraft {1} — resources: {2}",
+                            &[
+                                &info.name,
+                                &info.version_name.clone().unwrap_or("?".into()),
+                                &jar.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+                            ],
                         );
                         let same_world = self.world.as_ref().map(|w| w.path == info.path).unwrap_or(false);
                         let was_schem = self.is_schem();
@@ -373,7 +381,7 @@ impl App {
                         self.save_config();
                         self.start_map();
                     }
-                    Err(e) => self.status = format!("Erreur : {e}"),
+                    Err(e) => self.status = tf("Error: {0}", &[&e]),
                 }
             }
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -407,7 +415,7 @@ impl App {
 
     fn start_export(&mut self) {
         let (Some(reg), Some(dir), Some(s), Some(w)) = (self.reg.clone(), self.source(), self.sel, self.world.as_ref()) else {
-            self.last_result = Some(Err("Charge un monde et sélectionne une zone sur la carte (clic droit + glisser).".into()));
+            self.last_result = Some(Err(t("Load a world and select an area on the map (right-click + drag).")));
             return;
         };
         let mut dlg = rfd::FileDialog::new().add_filter("Wavefront OBJ", &["obj"]);
@@ -436,13 +444,9 @@ impl App {
             let r = (|| -> anyhow::Result<String> {
                 let mesh = build_mesh(&reg, &dir, sel, &opts, &p2)?;
                 let s = export::write_obj(&reg, &mesh, &opts, &out, &world_name, &p2)?;
-                Ok(format!(
-                    "Exporté : {} — {} faces, {} sommets, {} matériaux, {:.1} Mo",
-                    out.display(),
-                    s.quads,
-                    s.vertices,
-                    s.materials,
-                    s.obj_bytes as f64 / 1e6
+                Ok(tf(
+                    "Exported: {0} — {1} faces, {2} vertices, {3} materials, {4} MB",
+                    &[&out.display(), &s.quads, &s.vertices, &s.materials, &format!("{:.1}", s.obj_bytes as f64 / 1e6)],
                 ))
             })();
             let _ = tx.send(r.map_err(|e| format!("{e:#}")));
@@ -454,13 +458,13 @@ impl App {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("Monde");
+            ui.label(t("World"));
             let current = self
                 .saves
                 .iter()
                 .find(|s| s.1.to_string_lossy() == self.world_path)
                 .map(|s| s.0.clone())
-                .unwrap_or_else(|| "(autre dossier)".into());
+                .unwrap_or_else(|| t("(other folder)"));
             let mut picked = None;
             egui::ComboBox::from_id_salt("saves").selected_text(current).width(180.0).show_ui(ui, |ui| {
                 for (n, p) in &self.saves {
@@ -474,20 +478,20 @@ impl App {
                 self.start_load();
             }
             ui.add(egui::TextEdit::singleline(&mut self.world_path).desired_width(360.0));
-            if ui.button("…").on_hover_text("Choisir un dossier de monde").clicked() {
+            if ui.button("…").on_hover_text(t("Choose a world folder")).clicked() {
                 if let Some(p) = rfd::FileDialog::new().set_directory(self.mc_dir.join("saves")).pick_folder() {
                     self.world_path = p.to_string_lossy().to_string();
                     self.start_load();
                 }
             }
             if ui
-                .add_enabled(self.load_job.is_none(), egui::Button::new("Importer un schematic…"))
-                .on_hover_text(".schem (Sponge v1/v2/v3), .schematic (ancien MCEdit), .litematic, .nbt — tu peux aussi glisser le fichier sur la fenêtre")
+                .add_enabled(self.load_job.is_none(), egui::Button::new(t("Import a schematic…")))
+                .on_hover_text(t(".schem (Sponge v1/v2/v3), .schematic (legacy MCEdit), .litematic, .nbt — you can also drop the file onto the window"))
                 .clicked()
             {
                 self.pick_schematic();
             }
-            if ui.add_enabled(self.load_job.is_none(), egui::Button::new("Charger")).clicked() {
+            if ui.add_enabled(self.load_job.is_none(), egui::Button::new(t("Load"))).clicked() {
                 self.saves = world::list_saves(&self.mc_dir);
                 self.start_load();
             }
@@ -495,7 +499,7 @@ impl App {
                 ui.spinner();
             }
             ui.separator();
-            ui.label("Dimension");
+            ui.label(t("Dimension"));
             let dims: Vec<(String, bool)> = self
                 .world
                 .as_ref()
@@ -505,7 +509,7 @@ impl App {
             let mut new_dim = None;
             egui::ComboBox::from_id_salt("dims").selected_text(sel_text).width(200.0).show_ui(ui, |ui| {
                 for (i, (d, has)) in dims.iter().enumerate() {
-                    let label = if *has { d.clone() } else { format!("{d} (vide)") };
+                    let label = if *has { d.clone() } else { tf("{0} (empty)", &[d]) };
                     if ui.selectable_label(i == self.dim_idx, label).clicked() {
                         new_dim = Some(i);
                     }
@@ -518,10 +522,22 @@ impl App {
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Paramètres").clicked() {
+                let mut lang = i18n::current();
+                egui::ComboBox::from_id_salt("lang").selected_text(lang.native_name()).show_ui(ui, |ui| {
+                    for l in Lang::ALL {
+                        ui.selectable_value(&mut lang, l, l.native_name());
+                    }
+                })
+                .response
+                .on_hover_text(t("Language"));
+                if lang != i18n::current() {
+                    i18n::set(lang);
+                    self.save_config();
+                }
+                if ui.button(t("Settings")).clicked() {
                     self.show_settings = !self.show_settings;
                 }
-                if ui.button("Aller à…").clicked() {
+                if ui.button(t("Go to…")).clicked() {
                     self.goto = [self.center[0] as i32, self.center[1] as i32];
                     self.show_goto = !self.show_goto;
                 }
@@ -529,25 +545,25 @@ impl App {
         });
         ui.add_space(2.0);
         ui.horizontal(|ui| {
-            ui.label("Plancher");
+            ui.label(t("Floor"));
             let f = ui.add(egui::DragValue::new(&mut self.floor).range(-2048..=4096));
-            ui.label("Plafond");
+            ui.label(t("Ceiling"));
             let c = ui.add(egui::DragValue::new(&mut self.ceil).range(-2048..=4096));
             if (f.lost_focus() || f.drag_stopped() || c.lost_focus() || c.drag_stopped()) && self.reg.is_some() {
                 self.start_map();
             }
-            if ui.button("Actualiser la carte").clicked() {
+            if ui.button(t("Refresh map")).clicked() {
                 self.start_map();
             }
-            ui.checkbox(&mut self.show_chunks, "Afficher les chunks");
+            ui.checkbox(&mut self.show_chunks, t("Show chunks"));
             ui.separator();
             let mut s = self.sel.unwrap_or([0, 0, 0, 0]);
             let before = s;
-            ui.label("Position 1  X");
+            ui.label(format!("{}  X", t("Position 1")));
             ui.add(egui::DragValue::new(&mut s[0]));
             ui.label("Z");
             ui.add(egui::DragValue::new(&mut s[1]));
-            ui.label("  Position 2  X");
+            ui.label(format!("  {}  X", t("Position 2")));
             ui.add(egui::DragValue::new(&mut s[2]));
             ui.label("Z");
             ui.add(egui::DragValue::new(&mut s[3]));
@@ -556,8 +572,8 @@ impl App {
             }
             if let Some(s) = self.sel {
                 let (w, d) = ((s[2] - s[0]).abs() + 1, (s[3] - s[1]).abs() + 1);
-                ui.label(format!("  {w} × {d} × {} blocs", (self.ceil - self.floor).abs() + 1));
-                if ui.small_button("✖").on_hover_text("Effacer la sélection").clicked() {
+                ui.label(format!("  {}", tf("{0} × {1} × {2} blocks", &[&w, &d, &((self.ceil - self.floor).abs() + 1)])));
+                if ui.small_button("✖").on_hover_text(t("Clear selection")).clicked() {
                     self.sel = None;
                 }
             }
@@ -567,20 +583,20 @@ impl App {
 
     fn export_panel(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading("Export OBJ");
+            ui.heading(t("OBJ export"));
             ui.add_space(4.0);
             let o = &mut self.opts;
             egui::Grid::new("scale").num_columns(2).show(ui, |ui| {
-                ui.label("Échelle (taille d'un bloc)");
+                ui.label(t("Scale (size of one block)"));
                 ui.add(egui::DragValue::new(&mut o.scale).speed(0.01).range(0.001..=1000.0));
                 ui.end_row();
             });
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("Décalage").strong());
+            ui.label(egui::RichText::new(t("Offset")).strong());
             ui.horizontal(|ui| {
-                ui.radio_value(&mut o.offset_mode, OffsetMode::None, "Aucun");
-                ui.radio_value(&mut o.offset_mode, OffsetMode::Center, "Centrer");
-                ui.radio_value(&mut o.offset_mode, OffsetMode::Custom, "Personnalisé");
+                ui.radio_value(&mut o.offset_mode, OffsetMode::None, t("None"));
+                ui.radio_value(&mut o.offset_mode, OffsetMode::Center, t("Center"));
+                ui.radio_value(&mut o.offset_mode, OffsetMode::Custom, t("Custom"));
             });
             if o.offset_mode == OffsetMode::Custom {
                 ui.horizontal(|ui| {
@@ -591,66 +607,66 @@ impl App {
                 });
             }
             ui.separator();
-            ui.label(egui::RichText::new("Contenu").strong());
+            ui.label(egui::RichText::new(t("Content")).strong());
             let n_ex = o.excluded.len();
             if ui
-                .button(if n_ex == 0 { "Choisir les blocs à exporter…".to_string() } else { format!("Choisir les blocs à exporter… ({n_ex} exclus)") })
+                .button(if n_ex == 0 { t("Choose blocks to export…") } else { tf("Choose blocks to export… ({0} excluded)", &[&n_ex]) })
                 .clicked()
             {
                 self.show_blocks = true;
             }
             let o = &mut self.opts;
-            ui.checkbox(&mut o.render_unknown, "Afficher les blocs inconnus (mods)");
-            ui.checkbox(&mut o.render_sides, "Côtés et dessous du monde");
-            ui.checkbox(&mut o.render_biomes, "Couleurs des biomes");
-            ui.checkbox(&mut o.ore_to_stone, "Convertir les minerais en pierre");
-            ui.checkbox(&mut o.render_block_entities, "Coffres, bannières, têtes, panneaux…");
+            ui.checkbox(&mut o.render_unknown, t("Show unknown blocks (mods)"));
+            ui.checkbox(&mut o.render_sides, t("World sides and bottom"));
+            ui.checkbox(&mut o.render_biomes, t("Biome colors"));
+            ui.checkbox(&mut o.ore_to_stone, t("Convert ores to stone"));
+            ui.checkbox(&mut o.render_block_entities, t("Chests, banners, heads, signs…"));
             ui.add_enabled_ui(o.render_block_entities || o.render_entities, |ui| {
-                ui.checkbox(&mut o.sign_text, "Texte des panneaux");
+                ui.checkbox(&mut o.sign_text, t("Sign text"));
             });
-            ui.checkbox(&mut o.render_entities, "Entités (mobs, displays, cadres, tableaux…)");
-            ui.checkbox(&mut o.download_skins, "Télécharger les skins des têtes de joueur")
-                .on_hover_text("Les skins déjà vues en jeu sont lues dans le cache de Minecraft ; les autres sont demandées aux serveurs de Mojang.");
-            ui.checkbox(&mut o.ghast_on_ground, "Poser les ghasts sur leurs tentacules")
-                .on_hover_text("Dans le jeu, les tentacules des ghasts pendent sous leur position. Cochez pour les remonter au niveau du sol.");
+            ui.checkbox(&mut o.render_entities, t("Entities (mobs, displays, item frames, paintings…)"));
+            ui.checkbox(&mut o.download_skins, t("Download player head skins"))
+                .on_hover_text(t("Skins already seen in game are read from the Minecraft cache; the others are requested from Mojang's servers."));
+            ui.checkbox(&mut o.ghast_on_ground, t("Place ghasts on their tentacles"))
+                .on_hover_text(t("In the game, ghast tentacles hang below their position. Check this to raise them to ground level."));
             ui.separator();
-            ui.label(egui::RichText::new("Structure").strong());
-            ui.checkbox(&mut o.obj_per_material, "Un objet par matériau");
-            ui.checkbox(&mut o.obj_per_chunk, "Un objet par chunk");
-            ui.checkbox(&mut o.optimize, "Optimiser le maillage (fusion des faces)");
-            ui.checkbox(&mut o.double_sided, "Faces recto-verso (plantes, vitres fines)");
-            ui.checkbox(&mut o.randomize, "Variantes aléatoires des modèles");
-            ui.checkbox(&mut o.use_groups, "Groupes OBJ « g » (compatible Maya)");
+            ui.label(egui::RichText::new(t("Structure")).strong());
+            ui.checkbox(&mut o.obj_per_material, t("One object per material"));
+            ui.checkbox(&mut o.obj_per_chunk, t("One object per chunk"));
+            ui.checkbox(&mut o.optimize, t("Optimize mesh (merge faces)"));
+            ui.checkbox(&mut o.double_sided, t("Double-sided faces (plants, thin panes)"));
+            ui.checkbox(&mut o.randomize, t("Random model variants"));
+            ui.checkbox(&mut o.use_groups, t("OBJ groups “g” (Maya compatible)"));
             ui.separator();
-            ui.label(egui::RichText::new("Textures").strong());
-            ui.checkbox(&mut o.export_textures, "Exporter les textures");
+            ui.label(egui::RichText::new(t("Textures")).strong());
+            ui.checkbox(&mut o.export_textures, t("Export textures"));
             ui.add_enabled_ui(o.export_textures, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Agrandir");
+                    ui.label(t("Upscale"));
                     egui::ComboBox::from_id_salt("prescale").selected_text(format!("{}×", o.prescale)).show_ui(ui, |ui| {
                         for f in [1u32, 2, 4, 8, 16] {
                             ui.selectable_value(&mut o.prescale, f, format!("{f}×"));
                         }
                     });
                 });
-                ui.checkbox(&mut o.alpha_separate, "Canal alpha dans des fichiers séparés");
+                ui.checkbox(&mut o.alpha_separate, t("Alpha channel in separate files"));
             });
             ui.separator();
             ui.add_space(6.0);
             let busy = self.export.is_some();
             let can = self.sel.is_some() && self.reg.is_some() && !busy;
-            let btn = egui::Button::new(egui::RichText::new("Exporter…").size(18.0)).min_size(vec2(ui.available_width(), 36.0));
+            let btn = egui::Button::new(egui::RichText::new(t("Export…")).size(18.0)).min_size(vec2(ui.available_width(), 36.0));
             if ui.add_enabled(can, btn).clicked() {
                 self.save_config();
                 self.start_export();
             }
             if self.sel.is_none() {
-                ui.label(egui::RichText::new("Sélectionne une zone : clic droit + glisser sur la carte.").weak());
+                ui.label(egui::RichText::new(t("Select an area: right-click + drag on the map.")).weak());
             }
             if let Some(job) = &self.export {
                 let stage = job.prog.stage.lock().unwrap().clone();
                 ui.add(egui::ProgressBar::new(job.prog.fraction()).text(stage).animate(true));
-                if ui.button("Annuler").clicked() {
+                if ui.button(t("Cancel")).clicked() {
                     job.prog.cancel.store(true, Ordering::Relaxed);
                 }
             }
@@ -658,7 +674,7 @@ impl App {
                 Some(Ok(s)) => {
                     ui.label(egui::RichText::new(s).color(Color32::from_rgb(120, 200, 120)));
                     if let Some(p) = &self.last_export {
-                        if ui.button("Ouvrir le dossier").clicked() {
+                        if ui.button(t("Open folder")).clicked() {
                             if let Some(d) = p.parent() {
                                 let _ = std::process::Command::new("explorer").arg(d).spawn();
                             }
@@ -768,19 +784,19 @@ impl App {
         }
 
         // overlay: zoom and help
-        let help = format!(
-            "{:.2}×   clic gauche : déplacer · clic droit (ou Maj+clic) : sélectionner · molette : zoom",
-            self.zoom
+        let help = tf(
+            "{0}×   left click: pan · right click (or Shift+click): select · wheel: zoom",
+            &[&format!("{:.2}", self.zoom)],
         );
         painter.text(rect.left_top() + vec2(8.0, 6.0), egui::Align2::LEFT_TOP, help, egui::FontId::proportional(12.0), Color32::from_white_alpha(160));
         if self.reg.is_none() && self.load_job.is_none() {
-            painter.text(rect.center(), egui::Align2::CENTER_CENTER, "Choisis un monde puis « Charger », ou glisse un schematic ici", egui::FontId::proportional(18.0), Color32::from_white_alpha(140));
+            painter.text(rect.center(), egui::Align2::CENTER_CENTER, t("Choose a world then “Load”, or drop a schematic here"), egui::FontId::proportional(18.0), Color32::from_white_alpha(140));
         }
         if self.map_pending > 0 {
             painter.text(
                 rect.right_top() + vec2(-8.0, 6.0),
                 egui::Align2::RIGHT_TOP,
-                format!("Rendu de la carte… {} régions restantes", self.map_pending),
+                tf("Rendering map… {0} regions left", &[&self.map_pending]),
                 egui::FontId::proportional(12.0),
                 Color32::from_white_alpha(180),
             );
@@ -810,7 +826,7 @@ impl App {
         if self.show_goto {
             let mut open = true;
             let mut go = false;
-            egui::Window::new("Aller à").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
+            egui::Window::new(t("Go to")).open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("X");
                     ui.add(egui::DragValue::new(&mut self.goto[0]));
@@ -818,17 +834,17 @@ impl App {
                     ui.add(egui::DragValue::new(&mut self.goto[1]));
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("Aller").clicked() {
+                    if ui.button(t("Go")).clicked() {
                         go = true;
                     }
                     if let Some(w) = &self.world {
-                        if ui.button("Point d'apparition").clicked() {
+                        if ui.button(t("Spawn point")).clicked() {
                             self.goto = [w.spawn.0, w.spawn.1];
                             go = true;
                         }
                     }
                     if let Some(s) = self.sel {
-                        if ui.button("Sélection").clicked() {
+                        if ui.button(t("Selection")).clicked() {
                             self.goto = [(s[0] + s[2]) / 2, (s[1] + s[3]) / 2];
                             go = true;
                         }
@@ -844,14 +860,14 @@ impl App {
         if self.show_settings {
             let mut open = true;
             let mut reload = false;
-            egui::Window::new("Paramètres").open(&mut open).default_width(520.0).show(ctx, |ui| {
-                ui.label(egui::RichText::new("Ressources du jeu (textures et modèles)").strong());
+            egui::Window::new(t("Settings")).open(&mut open).default_width(520.0).show(ctx, |ui| {
+                ui.label(egui::RichText::new(t("Game resources (textures and models)")).strong());
                 let cur = match &self.jar_override {
                     Some(p) => p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
-                    None => "Automatique (version du monde)".into(),
+                    None => t("Automatic (world version)"),
                 };
                 egui::ComboBox::from_id_salt("jar").selected_text(cur).width(400.0).show_ui(ui, |ui| {
-                    if ui.selectable_label(self.jar_override.is_none(), "Automatique (version du monde)").clicked() {
+                    if ui.selectable_label(self.jar_override.is_none(), t("Automatic (world version)")).clicked() {
                         self.jar_override = None;
                     }
                     for j in &self.jars {
@@ -861,16 +877,16 @@ impl App {
                         }
                     }
                 });
-                if ui.button("Choisir un autre jar…").clicked() {
-                    if let Some(p) = rfd::FileDialog::new().add_filter("Jar Minecraft", &["jar"]).pick_file() {
+                if ui.button(t("Choose another jar…")).clicked() {
+                    if let Some(p) = rfd::FileDialog::new().add_filter(t("Minecraft jar"), &["jar"]).pick_file() {
                         self.jar_override = Some(p);
                     }
                 }
                 if let Some(r) = &self.reg {
-                    ui.label(egui::RichText::new(format!("En cours : {}", r.assets.jar_path.display())).weak());
+                    ui.label(egui::RichText::new(tf("Current: {0}", &[&r.assets.jar_path.display()])).weak());
                 }
                 ui.separator();
-                ui.label(egui::RichText::new("Packs de ressources (le premier est prioritaire)").strong());
+                ui.label(egui::RichText::new(t("Resource packs (the first one has priority)")).strong());
                 let mut remove = None;
                 let mut up = None;
                 for (i, p) in self.packs.iter().enumerate() {
@@ -891,23 +907,23 @@ impl App {
                     self.packs.swap(i, i - 1);
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("Ajouter un pack (.zip)…").clicked() {
+                    if ui.button(t("Add a pack (.zip)…")).clicked() {
                         if let Some(p) = rfd::FileDialog::new()
                             .set_directory(self.mc_dir.join("resourcepacks"))
-                            .add_filter("Pack de ressources", &["zip"])
+                            .add_filter(t("Resource pack"), &["zip"])
                             .pick_file()
                         {
                             self.packs.push(p);
                         }
                     }
-                    if ui.button("Ajouter un dossier…").clicked() {
+                    if ui.button(t("Add a folder…")).clicked() {
                         if let Some(p) = rfd::FileDialog::new().set_directory(self.mc_dir.join("resourcepacks")).pick_folder() {
                             self.packs.push(p);
                         }
                     }
                 });
                 ui.separator();
-                if ui.button("Appliquer et recharger").clicked() {
+                if ui.button(t("Apply and reload")).clicked() {
                     reload = true;
                 }
             });
@@ -923,19 +939,19 @@ impl App {
         if self.show_blocks {
             let mut open = true;
             let names = self.reg.as_ref().map(|r| r.block_names()).unwrap_or_default();
-            egui::Window::new("Blocs à exporter").open(&mut open).default_size([360.0, 520.0]).show(ctx, |ui| {
-                ui.label(egui::RichText::new("Blocs rencontrés dans les zones chargées. Décoche pour exclure.").weak());
+            egui::Window::new(t("Blocks to export")).open(&mut open).default_size([360.0, 520.0]).show(ctx, |ui| {
+                ui.label(egui::RichText::new(t("Blocks found in the loaded areas. Uncheck to exclude.")).weak());
                 ui.horizontal(|ui| {
-                    ui.label("Filtre");
+                    ui.label(t("Filter"));
                     ui.text_edit_singleline(&mut self.block_filter);
                 });
                 let filt = self.block_filter.to_lowercase();
                 let shown: Vec<&String> = names.iter().filter(|n| filt.is_empty() || n.contains(&filt)).collect();
                 ui.horizontal(|ui| {
-                    if ui.button("Tout cocher").clicked() {
+                    if ui.button(t("Check all")).clicked() {
                         self.opts.excluded.retain(|e| !shown.iter().any(|n| *n == e));
                     }
-                    if ui.button("Tout décocher").clicked() {
+                    if ui.button(t("Uncheck all")).clicked() {
                         for n in &shown {
                             if !self.opts.excluded.contains(n) {
                                 self.opts.excluded.push((*n).clone());
@@ -976,7 +992,7 @@ impl eframe::App for App {
                 self.world_path = p.to_string_lossy().to_string();
                 self.start_load();
             } else {
-                self.status = "Fichier non reconnu : glisse un .schem, .schematic, .litematic, .nbt ou un dossier de monde.".into();
+                self.status = t("Unrecognized file: drop a .schem, .schematic, .litematic, .nbt or a world folder.");
             }
         }
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));

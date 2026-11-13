@@ -449,10 +449,10 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
     let (cx0, cz0, cx1, cz1) = (sel.x0 >> 4, sel.z0 >> 4, sel.x1 >> 4, sel.z1 >> 4);
     crate::skins::DOWNLOAD.store(opts.download_skins, Ordering::Relaxed);
     crate::mobs2::GHAST_GROUND.store(opts.ghast_on_ground, Ordering::Relaxed);
-    prog.set_stage("Lecture des chunks", 1);
+    prog.set_stage(&crate::i18n::t("Reading chunks"), 1);
     let chunks = source.chunks(cx0 - 1, cz0 - 1, cx1 + 1, cz1 + 1, reg);
     if prog.cancel.load(Ordering::Relaxed) {
-        anyhow::bail!("Export annulé");
+        anyhow::bail!("{}", crate::i18n::t("Export cancelled"));
     }
 
     // ore replacement and excluded blocks
@@ -481,7 +481,7 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
             id
         })
         .collect();
-    prog.set_stage("Préparation des modèles", n);
+    prog.set_stage(&crate::i18n::t("Preparing models"), n);
     let geoms: Vec<Arc<BlockGeom>> = (0..n as u32)
         .into_par_iter()
         .map(|i| {
@@ -506,7 +506,7 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
             cols.push((cx, cz));
         }
     }
-    prog.set_stage("Génération du maillage", cols.len());
+    prog.set_stage(&crate::i18n::t("Building mesh"), cols.len());
     let parts: Vec<Partial> = cols
         .par_iter()
         .map(|&(cx, cz)| {
@@ -519,7 +519,7 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
         })
         .collect();
     if prog.cancel.load(Ordering::Relaxed) {
-        anyhow::bail!("Export annulé");
+        anyhow::bail!("{}", crate::i18n::t("Export cancelled"));
     }
     let mut quads = Vec::new();
     let mut cells: HashMap<PlaneKey, Vec<(i32, i32)>> = HashMap::new();
@@ -531,7 +531,7 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
     }
     // entities
     if opts.render_entities {
-        prog.set_stage("Entités", 1);
+        prog.set_stage(&crate::i18n::t("Entities"), 1);
         let ents = source.entities(cx0, cz0, cx1, cz1);
         let eo = crate::entity::EntOpts { sign_text: opts.sign_text, download_skins: opts.download_skins, world_dir: source.world_dir() };
         let plains = reg.biome_colors(0);
@@ -561,7 +561,7 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
             .collect();
         quads.extend(eq);
     }
-    prog.set_stage("Optimisation du maillage", 1);
+    prog.set_stage(&crate::i18n::t("Optimizing mesh"), 1);
     let merged: Vec<Vec<OutQuad>> = cells
         .par_iter()
         .map(|(k, v)| {

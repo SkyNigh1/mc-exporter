@@ -45,7 +45,7 @@ impl Layer {
 }
 
 fn load_zip(path: &Path, any_namespace: bool) -> Result<HashMap<String, Vec<u8>>> {
-    let f = fs::File::open(path).with_context(|| format!("ouverture de {}", path.display()))?;
+    let f = fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mut z = zip::ZipArchive::new(std::io::BufReader::new(f))?;
     let mut m = HashMap::new();
     for i in 0..z.len() {
@@ -114,7 +114,7 @@ impl Assets {
         layers.reverse();
         let jar_files = load_zip(jar, false)?;
         if !jar_files.contains_key("assets/minecraft/blockstates/stone.json") {
-            return Err(anyhow!("{} ne contient pas les ressources du jeu", jar.display()));
+            return Err(anyhow!("{} does not contain the game resources", jar.display()));
         }
         layers.push(Layer::Mem(jar_files));
         let mut a = Assets {
