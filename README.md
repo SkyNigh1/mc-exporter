@@ -1,11 +1,16 @@
 # MC Exporter
 
-Exporter for **Minecraft Java** worlds and schematics to **OBJ + MTL + PNG textures** 3D models, ready for Blender, Cinema 4D, Maya, 3ds Max, Unreal, Unity, and more.
+Exporter for **Minecraft Java** worlds and schematics to 3D models:
+
+- **OBJ + MTL + PNG textures**, for Blender, Cinema 4D, Maya, 3ds Max, Unreal, Unity, and more;
+- **glTF (.glb)**, a single file with embedded textures and proper transparency;
+- **STL** and **3MF** for **3D printing**: closed, manifold models at real size in millimetres.
 
 It is a native Windows desktop application: a single, self-contained `.exe`, with no Java, no browser and no installation. The idea is the same as jMc2Obj or Mineways, with two additions:
 
 - support for **every Java version**, from Beta worlds to the latest versions (26.x and the new `dimensions/` folder);
-- very broad **entity** support.
+- very broad **entity** support;
+- a built-in **3D preview** of the selection.
 
 The interface is available in **English** (default), **French**, **Spanish**, **German**, **Portuguese** and **Italian**, selectable from the top bar.
 
@@ -26,7 +31,9 @@ The latest version is available on the [Releases](https://github.com/SkyNigh1/mc
   - [Equipment and decorations](#equipment-and-decorations)
   - [Projectiles and small entities](#projectiles-and-small-entities)
 - [Supported sources](#supported-sources)
+- [Resource packs](#resource-packs)
 - [Export options](#export-options)
+- [3D printing](#3d-printing)
 - [Output files](#output-files)
 - [Building](#building)
 - [Command line](#command-line)
@@ -40,14 +47,15 @@ The latest version is available on the [Releases](https://github.com/SkyNigh1/mc
 1. Pick a world from `.minecraft/saves` (or any folder), or **drag a schematic** onto the window.
 2. The top-down map is drawn. Left-drag to pan, use the mouse wheel to zoom, **right-drag (or Shift + drag) to select** the area.
 3. Set the floor and ceiling, then the export options.
-4. **Export…**
+4. Optionally check the result in the **3D preview** tab (left drag to rotate, right drag to move, wheel to zoom). It is rebuilt automatically when the selection or the options change.
+5. Choose the format and **Export…**
 
 ### Game textures and models
 
 The application ships with no Minecraft assets. It reads textures, block models, biomes and fonts directly from the jar of your installed version (`.minecraft/versions/…`), and automatically picks the one that matches the world. As a result:
 
 - every vanilla block is supported, including blocks from future versions;
-- **resource packs** can be layered on top (`.zip` or folder).
+- **resource packs** can be layered on top (see [Resource packs](#resource-packs)).
 
 ---
 
@@ -161,6 +169,17 @@ Dimensions are read from the game's model classes, textures from your installed 
 
 ---
 
+## Resource packs
+
+Resource packs are set in **Settings**. Their textures, block models and blockstates replace the game's, in the order of the list (the first one has priority), for every format and for the 2D map and 3D preview.
+
+- **Use the packs enabled in Minecraft** takes the packs and the order from the game's `options.txt`.
+- Packs found in `.minecraft/resourcepacks` can be added in one click; any `.zip` or folder can be added too.
+- Pack **overlays** (folders that a pack applies only to some game versions) are applied according to the version of the jar in use, and zips that wrap the pack in an extra folder are handled.
+- Higher-resolution packs (32×, 64×, 128×…) are exported at their own resolution.
+
+---
+
 ## Export options
 
 | Option | Effect |
@@ -170,6 +189,7 @@ Dimensions are read from the game's model classes, textures from your installed 
 | Block selection | exclude specific blocks from the export |
 | Unknown blocks | show mod blocks as checkerboard cubes |
 | World sides and bottom | close the edges of the selection |
+| Hide closed cavities | drop what cannot be seen from outside the selection: sealed caves and rooms, with the blocks, mobs and items inside (the selection edges and glass, leaves, slabs… count as openings) |
 | Biome colors | tint grass, foliage and water according to the biome |
 | Ores to stone | replace ores with the surrounding stone |
 | Specially rendered blocks | chests, banners, heads, signs… |
@@ -182,10 +202,25 @@ Dimensions are read from the game's model classes, textures from your installed 
 | Optimize mesh | merges identical adjacent faces (much lighter files) |
 | Double-sided faces | duplicates the faces of plants and thin panes |
 | Random variants | picks model variants like the game does (grass, stone…) |
-| OBJ groups | `g` instead of `o` (Maya compatible) |
-| Textures | PNG export, ×1 to ×16 upscaling, alpha in separate files |
+| OBJ groups | `g` instead of `o` (Maya compatible, OBJ only) |
+| Textures | PNG export, ×1 to ×16 upscaling, alpha in separate files (OBJ only) |
 
 Options, the interface language and the last selection are remembered between sessions.
+
+---
+
+## 3D printing
+
+With the **STL** or **3MF** format, the selection is turned into a solid model ready for a slicer (Cura, PrusaSlicer, Bambu Studio…):
+
+| Option | Effect |
+|---|---|
+| Size of one block | in millimetres; the resulting maximum size is shown |
+| Detail | whole blocks, half blocks or quarter blocks: slabs, stairs, walls, beds, heads… keep their shape from the block models |
+| Hollow | keeps walls of the chosen thickness (in blocks) and empties the inside, to save material |
+| Remove floating pieces | deletes disconnected pieces smaller than the given number of blocks (stray leaves, lone blocks…) |
+
+The model is always **closed and manifold**: every edge is shared by exactly two faces, enclosed air pockets are filled, and blocks that touch only by an edge or a corner are joined. Plants, panes, rails, water and other parts too thin to print are left out. The **3MF** file also carries one color per block (from its texture and biome), and Z points up in both formats.
 
 ---
 
@@ -195,9 +230,14 @@ Options, the interface language and the last selection are remembered between se
 my_export.obj        geometry (vertices, UVs, normals, faces)
 my_export.mtl        materials
 my_export_tex/       one PNG texture per material
+
+my_export.glb        everything in one file (geometry, materials, PNG textures)
+
+my_export.stl        3D printing: binary STL, millimetres
+my_export.3mf        3D printing: millimetres, with colors
 ```
 
-Each material is named after its texture (`oak_planks`, `grass_block_top`…). Biome tints, banners, sign text, maps and trimmed armor are generated as separate textures.
+Each material is named after its texture (`oak_planks`, `grass_block_top`…). Biome tints, banners, sign text, maps and trimmed armor are generated as separate textures. In the glTF file, cut-out textures (leaves, plants, glass panes) use alpha masking and translucent ones (water, stained glass, clouds) use blending; textures are sampled with nearest filtering to keep the pixel-art look.
 
 ---
 
@@ -220,15 +260,26 @@ At runtime, the application needs **a version of Minecraft Java that has been la
 Useful for automation:
 
 ```sh
-# export an area of a world
+# export an area of a world (the format follows the extension: .obj, .glb, .stl or .3mf)
 mc-exporter.exe --export "<world folder>" minecraft:overworld x0 z0 x1 z1 y0 y1 output.obj
 
 # export a whole schematic (jar is optional)
-mc-exporter.exe --schem file.schem output.obj [path/to/minecraft.jar]
+mc-exporter.exe --schem file.schem output.glb [path/to/minecraft.jar]
 
 # map image of a region
 mc-exporter.exe --map "<world folder>" minecraft:overworld rx rz map.png
 ```
+
+Extra options, anywhere on the line:
+
+| Option | Effect |
+|---|---|
+| `--pack <zip or folder>` | add a resource pack (repeat for several, first has priority) |
+| `--hide-cavities` | hide closed cavities |
+| `--no-clouds` | no cloud layer |
+| `--block-mm <mm>` | 3D printing: size of one block (default 1) |
+| `--detail <1, 2 or 4>` | 3D printing: cells per block edge (default 2) |
+| `--hollow <blocks>` | 3D printing: hollow with this wall thickness |
 
 The file `exemples/demo-entites.schem` contains one instance of every supported block entity and entity, and serves as a visual test.
 
@@ -241,6 +292,8 @@ The file `exemples/demo-entites.schem` contains one instance of every supported 
 - Entities are frozen in a rest pose: there is no animation.
 - Maps in item frames are not available for schematics, which do not contain map data.
 - Mod blocks are not rendered (only a checkerboard cube).
+- OptiFine-specific pack features (connected textures, emissive textures, random entities) are not used.
+- 3D printing keeps one color per block, not the texture details.
 
 ---
 

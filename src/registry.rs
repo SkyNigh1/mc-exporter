@@ -669,7 +669,30 @@ impl Registry {
             g.fluid = Fluid::Lava(level);
         }
         let tint = tint_for(&name, key);
-        let (ns, p) = name.split_once(':').unwrap_or(("minecraft", &name));
+        match self.blockstate_parts(key) {
+            None => {
+                g.unknown = true;
+                let t = self.tex_id(UNKNOWN_TEX);
+                g.parts.push(vec![(1, unit_cube(t))]);
+                g.occludes = [true; 6];
+                g.map_tex = Some(t);
+                return g;
+            }
+            Some(list) => {
+                for v in &list {
+                    g.parts.push(self.variant_list(v, tint));
+                }
+            }
+        }
+        self.finish_geom(&mut g, &n);
+        g
+    }
+
+    /// The blockstate entries that apply to a state (one per part; each is a variant or
+    /// a list of weighted variants). None when the block has no blockstate file.
+    fn blockstate_parts(&self, key: &StateKey) -> Option<Vec<Value>> {
+        let name = &key.name;
+        let (ns, p) = name.split_once(':').unwrap_or(("minecraft", name));
         let bs_json = self.assets.json(&format!("assets/{ns}/blockstates/{p}.json")).or_else(|| {
             // blocks renamed between versions
             let alt = match p {
@@ -687,15 +710,9 @@ impl Registry {
             };
             self.assets.json(&format!("assets/{ns}/blockstates/{alt}.json"))
         });
+        let mut out = Vec::new();
         match bs_json {
-            None => {
-                g.unknown = true;
-                let t = self.tex_id(UNKNOWN_TEX);
-                g.parts.push(vec![(1, unit_cube(t))]);
-                g.occludes = [true; 6];
-                g.map_tex = Some(t);
-                return g;
-            }
+            None => return None,
             Some(bs) => {
                 if let Some(vars) = bs.get("variants").and_then(|v| v.as_object()) {
                     let matches = |k: &str, lenient: bool| {
@@ -709,20 +726,79 @@ impl Registry {
                     };
                     let found = vars.iter().find(|(k, _)| matches(k, false)).or_else(|| vars.iter().find(|(k, _)| matches(k, true)));
                     if let Some((_, v)) = found {
-                        g.parts.push(self.variant_list(v, tint));
+                        out.push(v.clone());
                     }
                 } else if let Some(mp) = bs.get("multipart").and_then(|v| v.as_array()) {
                     for case in mp {
                         let ok = case.get("when").map(|w| when_matches(w, key)).unwrap_or(true);
                         if ok {
                             if let Some(a) = case.get("apply") {
-                                g.parts.push(self.variant_list(a, tint));
+                                out.push(a.clone());
                             }
                         }
                     }
                 }
             }
         }
+        Some(out)
+    }
+
+    /// Solid boxes of a state's model (first variant of each part), in block units,
+    /// for voxelization. Rotated elements are replaced by their bounding box.
+    pub fn state_boxes(&self, id: u32) -> Vec<([f32; 3], [f32; 3])> {
+        let Some(list) = self.blockstate_parts(&self.state(id)) else { return vec![([0.0; 3], [1.0; 3])] };
+        let mut out = Vec::new();
+        for v in &list {
+            let v = match v {
+                Value::Array(a) => match a.first() {
+                    Some(x) => x,
+                    None => continue,
+                },
+                x => x,
+            };
+            let model = v.get("model").and_then(|m| m.as_str()).unwrap_or("");
+            let vx = v.get("x").and_then(|m| m.as_i64()).unwrap_or(0) as f32;
+            let vy = v.get("y").and_then(|m| m.as_i64()).unwrap_or(0) as f32;
+            let vrot = mat_mul(&rot('y', -vy), &rot('x', -vx));
+            let Some(m) = self.model(model) else { continue };
+            for e in &m.elements {
+                let (Some(f), Some(t)) = (arr3(e.get("from")), arr3(e.get("to"))) else { continue };
+                // flat or very thin elements (plants, panes of rails, overlays) have no volume
+                if (0..3).any(|i| (t[i] - f[i]).abs() < 1.0) {
+                    continue;
+                }
+                let mut corners: Vec<[f32; 3]> = (0..8)
+                    .map(|i| [if i & 1 == 0 { f[0] } else { t[0] }, if i & 2 == 0 { f[1] } else { t[1] }, if i & 4 == 0 { f[2] } else { t[2] }])
+                    .collect();
+                if let Some(r) = e.get("rotation") {
+                    let origin = arr3(r.get("origin")).unwrap_or([8.0, 8.0, 8.0]);
+                    let mm = match (r.get("axis").and_then(|a| a.as_str()), r.get("angle").and_then(|a| a.as_f64())) {
+                        (Some(axis), Some(angle)) => rot(axis.chars().next().unwrap_or('y'), angle as f32),
+                        _ => {
+                            let g = |k: &str| r.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+                            mat_mul(&rot('z', g("z")), &mat_mul(&rot('y', g("y")), &rot('x', g("x"))))
+                        }
+                    };
+                    for c in corners.iter_mut() {
+                        let q = mat_vec(&mm, [c[0] - origin[0], c[1] - origin[1], c[2] - origin[2]]);
+                        *c = [q[0] + origin[0], q[1] + origin[1], q[2] + origin[2]];
+                    }
+                }
+                let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                for c in &corners {
+                    let p = mat_vec(&vrot, [c[0] / 16.0 - 0.5, c[1] / 16.0 - 0.5, c[2] / 16.0 - 0.5]);
+                    for a in 0..3 {
+                        lo[a] = lo[a].min(p[a] + 0.5);
+                        hi[a] = hi[a].max(p[a] + 0.5);
+                    }
+                }
+                out.push((lo, hi));
+            }
+        }
+        out
+    }
+
+    fn finish_geom(&self, g: &mut BlockGeom, n: &str) {
         g.has_model = g.parts.iter().any(|p| p.first().map(|(_, q)| !q.is_empty()).unwrap_or(false));
         // occlusion and map color, from the first variant of each part
         let mut best_up: Option<(f32, u32, Tint)> = None;
@@ -757,7 +833,8 @@ impl Registry {
             g.map_tint = ti;
         }
         // blocks without geometry (chests, banners…): the model's "particle" texture for the 2D map
-        if g.map_tex.is_none() && !matches!(n.as_str(), "barrier" | "light" | "structure_void" | "moving_piston") {
+        if g.map_tex.is_none() && !matches!(n, "barrier" | "light" | "structure_void" | "moving_piston") {
+            let (ns, p) = g.name.split_once(':').unwrap_or(("minecraft", &g.name));
             if let Some(bs) = self.assets.json(&format!("assets/{ns}/blockstates/{p}.json")) {
                 let first_model = |v: &Value| -> Option<String> {
                     let v = if let Value::Array(a) = v { a.first()? } else { v };
@@ -783,7 +860,6 @@ impl Registry {
         } else if let Fluid::Lava(_) = g.fluid {
             g.map_tex = Some(self.tex_id("minecraft:block/lava_still"));
         }
-        g
     }
 }
 

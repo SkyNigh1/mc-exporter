@@ -51,6 +51,49 @@ pub struct ExportOptions {
     pub clouds: bool,
     /// height of the cloud layer (192 since 1.18, 128 before)
     pub cloud_height: i32,
+    /// drop what cannot be seen from outside the selection (closed caves and rooms)
+    pub hide_cavities: bool,
+    /// output format
+    pub format: ExportFormat,
+    /// 3D printing: size of one block in millimetres
+    pub print_block_mm: f32,
+    /// 3D printing: subdivisions per block edge (1, 2 or 4)
+    pub print_detail: u32,
+    /// 3D printing: wall thickness in blocks when hollowing (0 = solid)
+    pub print_hollow: u32,
+    /// 3D printing: remove floating pieces smaller than this many blocks (0 = keep all)
+    pub print_min_piece: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
+pub enum ExportFormat {
+    Obj,
+    Glb,
+    Stl,
+    ThreeMf,
+}
+
+impl ExportFormat {
+    pub fn ext(self) -> &'static str {
+        match self {
+            ExportFormat::Obj => "obj",
+            ExportFormat::Glb => "glb",
+            ExportFormat::Stl => "stl",
+            ExportFormat::ThreeMf => "3mf",
+        }
+    }
+    pub fn from_ext(e: &str) -> Option<ExportFormat> {
+        match e.to_ascii_lowercase().as_str() {
+            "obj" => Some(ExportFormat::Obj),
+            "glb" => Some(ExportFormat::Glb),
+            "stl" => Some(ExportFormat::Stl),
+            "3mf" => Some(ExportFormat::ThreeMf),
+            _ => None,
+        }
+    }
+    pub fn is_print(self) -> bool {
+        matches!(self, ExportFormat::Stl | ExportFormat::ThreeMf)
+    }
 }
 
 impl Default for ExportOptions {
@@ -81,6 +124,12 @@ impl Default for ExportOptions {
             ghast_on_ground: false,
             clouds: true,
             cloud_height: 192,
+            hide_cavities: false,
+            format: ExportFormat::Obj,
+            print_block_mm: 1.0,
+            print_detail: 2,
+            print_hollow: 0,
+            print_min_piece: 8,
         }
     }
 }
@@ -106,7 +155,7 @@ impl Selection {
             y1: self.y0.max(self.y1),
         }
     }
-    fn contains(&self, x: i32, y: i32, z: i32) -> bool {
+    pub fn contains(&self, x: i32, y: i32, z: i32) -> bool {
         x >= self.x0 && x <= self.x1 && z >= self.z0 && z <= self.z1 && y >= self.y0 && y <= self.y1
     }
 }
@@ -148,6 +197,85 @@ struct Ctx<'a> {
     reg: &'a Registry,
     water_tex: u32,
     lava_tex: u32,
+    /// cells reachable from outside the selection (None: everything is visible)
+    reach: Option<&'a Reach>,
+}
+
+/// Cells of the selection that can be seen from outside it.
+pub struct Reach {
+    sel: Selection,
+    sx: usize,
+    sz: usize,
+    bits: Vec<u64>,
+}
+
+impl Reach {
+    #[inline]
+    fn index(&self, x: i32, y: i32, z: i32) -> usize {
+        ((y - self.sel.y0) as usize * self.sz + (z - self.sel.z0) as usize) * self.sx + (x - self.sel.x0) as usize
+    }
+    /// true outside the selection
+    #[inline]
+    pub fn seen(&self, x: i32, y: i32, z: i32) -> bool {
+        if !self.sel.contains(x, y, z) {
+            return true;
+        }
+        let i = self.index(x, y, z);
+        self.bits[i >> 6] >> (i & 63) & 1 != 0
+    }
+    /// the cell or one of its neighbours is seen
+    pub fn near(&self, x: i32, y: i32, z: i32) -> bool {
+        self.seen(x, y, z)
+            || crate::registry::DIRS.iter().any(|d| {
+                let v = d.vec();
+                self.seen(x + v[0], y + v[1], z + v[2])
+            })
+    }
+}
+
+/// Flood fill from the selection boundary through every cell that is not a full
+/// opaque cube (air, glass, plants, slabs…).
+fn compute_reach(ctx: &Ctx) -> Option<Reach> {
+    let sel = ctx.sel;
+    let (sx, sy, sz) = ((sel.x1 - sel.x0 + 1) as usize, (sel.y1 - sel.y0 + 1) as usize, (sel.z1 - sel.z0 + 1) as usize);
+    let n = sx * sy * sz;
+    if n > 200_000_000 {
+        return None;
+    }
+    let mut r = Reach { sel, sx, sz, bits: vec![0u64; n.div_ceil(64)] };
+    let passable = |x: i32, y: i32, z: i32| -> bool {
+        let g = &ctx.geoms[ctx.get(x, y, z) as usize];
+        !g.occludes.iter().all(|o| *o) || (g.unknown && !ctx.opts.render_unknown)
+    };
+    let mut stack: Vec<(i32, i32, i32)> = Vec::new();
+    let mut visit = |r: &mut Reach, stack: &mut Vec<(i32, i32, i32)>, x: i32, y: i32, z: i32| {
+        if !sel.contains(x, y, z) {
+            return;
+        }
+        let i = r.index(x, y, z);
+        if r.bits[i >> 6] >> (i & 63) & 1 != 0 || !passable(x, y, z) {
+            return;
+        }
+        r.bits[i >> 6] |= 1 << (i & 63);
+        stack.push((x, y, z));
+    };
+    for y in sel.y0..=sel.y1 {
+        for z in sel.z0..=sel.z1 {
+            for x in sel.x0..=sel.x1 {
+                let edge = x == sel.x0 || x == sel.x1 || y == sel.y0 || y == sel.y1 || z == sel.z0 || z == sel.z1;
+                if edge {
+                    visit(&mut r, &mut stack, x, y, z);
+                }
+            }
+        }
+    }
+    while let Some((x, y, z)) = stack.pop() {
+        for d in crate::registry::DIRS {
+            let v = d.vec();
+            visit(&mut r, &mut stack, x + v[0], y + v[1], z + v[2]);
+        }
+    }
+    Some(r)
 }
 
 impl Ctx<'_> {
@@ -273,6 +401,11 @@ fn mesh_column(ctx: &Ctx, cx: i32, cz: i32) -> Partial {
                 if g.unknown && !ctx.opts.render_unknown {
                     continue;
                 }
+                if let Some(r) = ctx.reach {
+                    if !r.near(x, y, z) {
+                        continue;
+                    }
+                }
                 let biome = if ctx.opts.render_biomes {
                     ctx.reg.biome_colors(chunk.biome(lx as usize, y, lz as usize))
                 } else {
@@ -307,6 +440,11 @@ fn mesh_column(ctx: &Ctx, cx: i32, cz: i32) -> Partial {
                             }
                             if g.same_cull && nid == id {
                                 continue;
+                            }
+                            if let Some(r) = ctx.reach {
+                                if !r.seen(x + v[0], y + v[1], z + v[2]) {
+                                    continue;
+                                }
                             }
                         }
                         let tint = q.tint.color(&biome);
@@ -353,6 +491,11 @@ fn mesh_column(ctx: &Ctx, cx: i32, cz: i32) -> Partial {
                         }
                         if d != Dir::Up && ng.occludes[d.opposite() as usize] {
                             continue;
+                        }
+                        if let Some(r) = ctx.reach {
+                            if !r.seen(x + v[0], y + v[1], z + v[2]) {
+                                continue;
+                            }
                         }
                         let c: [[f32; 3]; 4] = match d {
                             Dir::Down => [[0., 0., 1.], [1., 0., 1.], [1., 0., 0.], [0., 0., 0.]],
@@ -496,7 +639,7 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
         })
         .collect();
 
-    let ctx = Ctx {
+    let mut ctx = Ctx {
         chunks: &chunks,
         geoms: &geoms,
         remap: &remap,
@@ -505,7 +648,15 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
         reg,
         water_tex: reg.tex_id("minecraft:block/water_still"),
         lava_tex: reg.tex_id("minecraft:block/lava_still"),
+        reach: None,
     };
+    let reach = if opts.hide_cavities {
+        prog.set_stage(&crate::i18n::t("Finding hidden cavities"), 1);
+        compute_reach(&ctx)
+    } else {
+        None
+    };
+    ctx.reach = reach.as_ref();
     let mut cols = Vec::new();
     for cx in cx0..=cx1 {
         for cz in cz0..=cz1 {
@@ -548,6 +699,7 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
                     .map(|p| {
                         p[0] >= sel.x0 as f64 && p[0] < (sel.x1 + 1) as f64 && p[2] >= sel.z0 as f64 && p[2] < (sel.z1 + 1) as f64
                             && p[1] >= sel.y0 as f64 - 1.0 && p[1] < (sel.y1 + 1) as f64
+                            && reach.as_ref().map(|r| r.near(p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32)).unwrap_or(true)
                     })
                     .unwrap_or(false)
             })

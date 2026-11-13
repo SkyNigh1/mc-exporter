@@ -1,5 +1,6 @@
 //! Graphical user interface (egui / eframe).
 
+use crate::mesh::ExportFormat;
 use crate::assets::{self, Assets, JarInfo};
 use crate::export;
 use crate::map::{RegionMap, render_region};
@@ -29,6 +30,7 @@ struct Config {
     sel: Option<[i32; 4]>,
     last_export: Option<PathBuf>,
     lang: Lang,
+    view_3d: bool,
 }
 
 fn config_path() -> PathBuf {
@@ -105,6 +107,16 @@ pub struct App {
     last_result: Option<Result<String, String>>,
     last_export: Option<PathBuf>,
     hover: Option<(i32, i32)>,
+
+    /// 3D preview
+    view_3d: bool,
+    pv_ok: bool,
+    pv_cam: crate::preview::Camera,
+    pv_mesh: Option<Arc<crate::preview::PreviewMesh>>,
+    pv_gen: u64,
+    pv_key: String,
+    pv_job: Option<(Receiver<Result<Arc<crate::preview::PreviewMesh>, String>>, Arc<Progress>)>,
+    pv_status: String,
 }
 
 pub fn run() -> eframe::Result {
@@ -113,13 +125,22 @@ pub fn run() -> eframe::Result {
             .with_inner_size([1360.0, 860.0])
             .with_min_inner_size([900.0, 560.0])
             .with_title("MC Exporter"),
+        // depth buffer for the 3D preview
+        depth_buffer: 32,
         ..Default::default()
     };
     eframe::run_native("MC Exporter", options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
 }
 
 impl App {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let pv_ok = match cc.wgpu_render_state.as_ref() {
+            Some(rs) => {
+                crate::preview::init(rs);
+                true
+            }
+            None => false,
+        };
         let cfg: Config = std::fs::read(config_path())
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
@@ -167,6 +188,14 @@ impl App {
             last_result: None,
             last_export: cfg.last_export,
             hover: None,
+            view_3d: cfg.view_3d && pv_ok,
+            pv_ok,
+            pv_cam: crate::preview::Camera::new(16.0),
+            pv_mesh: None,
+            pv_gen: 0,
+            pv_key: String::new(),
+            pv_job: None,
+            pv_status: String::new(),
         };
         if app.jars.is_empty() {
             app.status = t("No Minecraft version found in .minecraft/versions: launch the game once or pick a jar in the settings.");
@@ -187,6 +216,7 @@ impl App {
             sel: self.sel,
             last_export: self.last_export.clone(),
             lang: i18n::current(),
+            view_3d: self.view_3d,
         };
         let p = config_path();
         let _ = std::fs::create_dir_all(p.parent().unwrap());
@@ -402,6 +432,25 @@ impl App {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
             }
         }
+        if let Some((rx, _)) = &self.pv_job {
+            match rx.try_recv() {
+                Ok(Ok(m)) => {
+                    self.pv_status = tf("{0} faces", &[&m.quads]);
+                    let first = self.pv_mesh.is_none();
+                    if first || self.pv_cam.dist > m.radius * 20.0 {
+                        self.pv_cam = crate::preview::Camera::new(m.radius);
+                    }
+                    self.pv_mesh = Some(m);
+                    self.pv_gen += 1;
+                    self.pv_job = None;
+                }
+                Ok(Err(e)) => {
+                    self.pv_status = e;
+                    self.pv_job = None;
+                }
+                Err(_) => ctx.request_repaint_after(std::time::Duration::from_millis(100)),
+            }
+        }
         if let Some(job) = &self.export {
             if let Ok(r) = job.rx.try_recv() {
                 let r = r.map(|s| format!("{s} ({:.1} s)", job.started.elapsed().as_secs_f32()));
@@ -418,19 +467,30 @@ impl App {
             self.last_result = Some(Err(t("Load a world and select an area on the map (right-click + drag).")));
             return;
         };
-        let mut dlg = rfd::FileDialog::new().add_filter("Wavefront OBJ", &["obj"]);
+        let fmt = self.opts.format;
+        let ext = fmt.ext();
+        let label = match fmt {
+            ExportFormat::Obj => "Wavefront OBJ",
+            ExportFormat::Glb => "glTF binary",
+            ExportFormat::Stl => "STL",
+            ExportFormat::ThreeMf => "3MF",
+        };
+        let mut dlg = rfd::FileDialog::new().add_filter(label, &[ext]);
+        let stem = |p: &PathBuf| p.file_stem().map(|s| s.to_string_lossy().to_string());
         match &self.last_export {
             Some(p) => {
                 if let Some(d) = p.parent() {
                     dlg = dlg.set_directory(d);
                 }
-                dlg = dlg.set_file_name(p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or("export.obj".into()));
+                dlg = dlg.set_file_name(format!("{}.{ext}", stem(p).unwrap_or("export".into())));
             }
-            None => dlg = dlg.set_file_name(format!("{}.obj", w.name.replace(|c: char| !c.is_alphanumeric(), "_"))),
+            None => dlg = dlg.set_file_name(format!("{}.{ext}", w.name.replace(|c: char| !c.is_alphanumeric(), "_"))),
         }
         let Some(mut out) = dlg.save_file() else { return };
-        if out.extension().is_none() {
-            out.set_extension("obj");
+        if out.extension().map(|e| !e.eq_ignore_ascii_case(ext)).unwrap_or(true) {
+            let mut n = out.into_os_string();
+            n.push(format!(".{ext}"));
+            out = PathBuf::from(n);
         }
         self.last_export = Some(out.clone());
         self.save_config();
@@ -442,8 +502,7 @@ impl App {
         let (tx, rx) = unbounded();
         std::thread::spawn(move || {
             let r = (|| -> anyhow::Result<String> {
-                let mesh = build_mesh(&reg, &dir, sel, &opts, &p2)?;
-                let s = export::write_obj(&reg, &mesh, &opts, &out, &world_name, &p2)?;
+                let s = export::run_export(&reg, &dir, sel, &opts, &out, &world_name, &p2)?;
                 Ok(tf(
                     "Exported: {0} — {1} faces, {2} vertices, {3} materials, {4} MB",
                     &[&out.display(), &s.quads, &s.vertices, &s.materials, &format!("{:.1}", s.obj_bytes as f64 / 1e6)],
@@ -583,8 +642,25 @@ impl App {
 
     fn export_panel(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.heading(t("OBJ export"));
+            ui.heading(t("Export"));
             ui.add_space(4.0);
+            let o = &mut self.opts;
+            let fname = |f: ExportFormat| match f {
+                ExportFormat::Obj => t("OBJ (textured, all 3D software)"),
+                ExportFormat::Glb => t("glTF .glb (single file, Blender, game engines)"),
+                ExportFormat::Stl => t("STL (3D printing)"),
+                ExportFormat::ThreeMf => t("3MF (3D printing, with colors)"),
+            };
+            egui::ComboBox::from_id_salt("format").selected_text(fname(o.format)).width(ui.available_width() - 8.0).show_ui(ui, |ui| {
+                for f in [ExportFormat::Obj, ExportFormat::Glb, ExportFormat::Stl, ExportFormat::ThreeMf] {
+                    ui.selectable_value(&mut o.format, f, fname(f));
+                }
+            });
+            ui.add_space(4.0);
+            if o.format.is_print() {
+                self.print_panel(ui);
+                return;
+            }
             let o = &mut self.opts;
             egui::Grid::new("scale").num_columns(2).show(ui, |ui| {
                 ui.label(t("Scale (size of one block)"));
@@ -618,6 +694,8 @@ impl App {
             let o = &mut self.opts;
             ui.checkbox(&mut o.render_unknown, t("Show unknown blocks (mods)"));
             ui.checkbox(&mut o.render_sides, t("World sides and bottom"));
+            ui.checkbox(&mut o.hide_cavities, t("Hide closed cavities"))
+                .on_hover_text(t("Removes what cannot be seen from outside the selection: closed caves, sealed rooms and their contents."));
             ui.checkbox(&mut o.render_biomes, t("Biome colors"));
             ui.checkbox(&mut o.ore_to_stone, t("Convert ores to stone"));
             ui.checkbox(&mut o.render_block_entities, t("Chests, banners, heads, signs…"));
@@ -641,7 +719,9 @@ impl App {
             ui.checkbox(&mut o.optimize, t("Optimize mesh (merge faces)"));
             ui.checkbox(&mut o.double_sided, t("Double-sided faces (plants, thin panes)"));
             ui.checkbox(&mut o.randomize, t("Random model variants"));
-            ui.checkbox(&mut o.use_groups, t("OBJ groups “g” (Maya compatible)"));
+            if o.format == ExportFormat::Obj {
+                ui.checkbox(&mut o.use_groups, t("OBJ groups “g” (Maya compatible)"));
+            }
             ui.separator();
             ui.label(egui::RichText::new(t("Textures")).strong());
             ui.checkbox(&mut o.export_textures, t("Export textures"));
@@ -654,8 +734,74 @@ impl App {
                         }
                     });
                 });
-                ui.checkbox(&mut o.alpha_separate, t("Alpha channel in separate files"));
+                if o.format == ExportFormat::Obj {
+                    ui.checkbox(&mut o.alpha_separate, t("Alpha channel in separate files"));
+                }
             });
+            self.export_button(ui);
+        });
+    }
+
+    /// Options of the 3D printing formats
+    fn print_panel(&mut self, ui: &mut egui::Ui) {
+        let o = &mut self.opts;
+        egui::Grid::new("print").num_columns(2).show(ui, |ui| {
+            ui.label(t("Size of one block (mm)"));
+            ui.add(egui::DragValue::new(&mut o.print_block_mm).speed(0.05).range(0.1..=100.0));
+            ui.end_row();
+            ui.label(t("Detail"));
+            egui::ComboBox::from_id_salt("detail")
+                .selected_text(match o.print_detail {
+                    1 => t("Whole blocks"),
+                    4 => t("Fine (¼ block)"),
+                    _ => t("Half blocks"),
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut o.print_detail, 1, t("Whole blocks"));
+                    ui.selectable_value(&mut o.print_detail, 2, t("Half blocks"));
+                    ui.selectable_value(&mut o.print_detail, 4, t("Fine (¼ block)"));
+                });
+            ui.end_row();
+            ui.label(t("Hollow (wall thickness)"));
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut o.print_hollow).range(0..=32).suffix(t(" blocks")));
+                if o.print_hollow == 0 {
+                    ui.label(egui::RichText::new(t("solid")).weak());
+                }
+            });
+            ui.end_row();
+            ui.label(t("Remove floating pieces under"));
+            ui.add(egui::DragValue::new(&mut o.print_min_piece).range(0..=10000).suffix(t(" blocks")));
+            ui.end_row();
+        });
+        if let Some(s) = self.sel {
+            let mm = o.print_block_mm;
+            let (w, d, h) = ((s[2] - s[0]).abs() + 1, (s[3] - s[1]).abs() + 1, self.ceil - self.floor + 1);
+            ui.label(egui::RichText::new(tf("Maximum size: {0} × {1} × {2} mm", &[
+                &format!("{:.0}", w as f32 * mm),
+                &format!("{:.0}", d as f32 * mm),
+                &format!("{:.0}", h as f32 * mm),
+            ])).weak());
+        }
+        ui.label(egui::RichText::new(t("The model is closed and manifold: air pockets are filled, blocks touching only by an edge are joined, plants and other thin parts are left out. Z points up.")).weak());
+        ui.separator();
+        ui.label(egui::RichText::new(t("Content")).strong());
+        let n_ex = o.excluded.len();
+        if ui
+            .button(if n_ex == 0 { t("Choose blocks to export…") } else { tf("Choose blocks to export… ({0} excluded)", &[&n_ex]) })
+            .clicked()
+        {
+            self.show_blocks = true;
+        }
+        let o = &mut self.opts;
+        ui.checkbox(&mut o.render_biomes, t("Biome colors"));
+        ui.checkbox(&mut o.ore_to_stone, t("Convert ores to stone"));
+        ui.checkbox(&mut o.render_unknown, t("Show unknown blocks (mods)"));
+        self.export_button(ui);
+    }
+
+    fn export_button(&mut self, ui: &mut egui::Ui) {
+        {
             ui.separator();
             ui.add_space(6.0);
             let busy = self.export.is_some();
@@ -691,7 +837,7 @@ impl App {
                 }
                 None => {}
             }
-        });
+        }
     }
 
     fn world_to_screen(&self, rect: Rect, x: f64, z: f64) -> Pos2 {
@@ -702,6 +848,89 @@ impl App {
     fn screen_to_world(&self, rect: Rect, p: Pos2) -> [f64; 2] {
         let c = rect.center();
         [self.center[0] + ((p.x - c.x) / self.zoom) as f64, self.center[1] + ((p.y - c.y) / self.zoom) as f64]
+    }
+
+    /// Key of what the preview shows: rebuilt when the selection or the options change
+    fn preview_key(&self) -> String {
+        let mut o = self.opts.clone();
+        // options that do not change the geometry
+        o.format = crate::mesh::ExportFormat::Obj;
+        o.scale = 1.0;
+        o.offset_mode = OffsetMode::None;
+        o.prescale = 1;
+        format!(
+            "{:?}|{}|{}|{:?}|{}|{}|{}",
+            self.sel,
+            self.floor,
+            self.ceil,
+            serde_json::to_string(&o).unwrap_or_default(),
+            self.world_path,
+            self.dim_idx,
+            self.reg.as_ref().map(|r| Arc::as_ptr(r) as usize).unwrap_or(0)
+        )
+    }
+
+    fn start_preview(&mut self) {
+        let (Some(reg), Some(src), Some(s)) = (self.reg.clone(), self.source(), self.sel) else {
+            self.pv_status = t("Select an area: right-click + drag on the map.");
+            return;
+        };
+        if let Some((_, p)) = &self.pv_job {
+            p.cancel.store(true, Ordering::Relaxed);
+        }
+        self.pv_key = self.preview_key();
+        let sel = Selection { x0: s[0], z0: s[1], x1: s[2], z1: s[3], y0: self.floor, y1: self.ceil };
+        let mut opts = self.opts.clone();
+        opts.optimize = true;
+        let prog = Arc::new(Progress::new());
+        let p2 = prog.clone();
+        let (tx, rx) = unbounded();
+        std::thread::spawn(move || {
+            let r = build_mesh(&reg, &src, sel, &opts, &p2).map(|m| Arc::new(crate::preview::PreviewMesh::build(&reg, &m)));
+            let _ = tx.send(r.map_err(|e| format!("{e:#}")));
+        });
+        self.pv_job = Some((rx, prog));
+    }
+
+    fn central(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("view-tabs").show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.view_3d, false, t("2D map"));
+                ui.add_enabled_ui(self.pv_ok, |ui| {
+                    ui.selectable_value(&mut self.view_3d, true, t("3D preview"))
+                        .on_disabled_hover_text(t("The 3D preview needs a GPU renderer."));
+                });
+                if self.view_3d {
+                    ui.separator();
+                    if ui.button(t("Refresh")).clicked() {
+                        self.start_preview();
+                    }
+                    if let Some((_, p)) = &self.pv_job {
+                        ui.add(egui::Spinner::new());
+                        ui.label(p.stage.lock().unwrap().clone());
+                    } else {
+                        ui.label(&self.pv_status);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new(t("Left drag: rotate · right drag: move · wheel: zoom · double-click: reset")).weak());
+                    });
+                }
+            });
+        });
+        if self.view_3d {
+            // rebuilt automatically when the selection or the options change
+            if self.pv_job.is_none() && self.sel.is_some() && self.reg.is_some() && self.preview_key() != self.pv_key {
+                self.start_preview();
+            }
+            let rect = ui.available_rect_before_wrap();
+            ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(135, 168, 208));
+            if self.sel.is_none() {
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, t("Select an area: right-click + drag on the map."), egui::FontId::proportional(16.0), Color32::from_gray(40));
+            }
+            crate::preview::show(ui, rect, &mut self.pv_cam, &self.pv_mesh, self.pv_gen);
+        } else {
+            self.map_view(ui);
+        }
     }
 
     fn map_view(&mut self, ui: &mut egui::Ui) {
@@ -911,6 +1140,26 @@ impl App {
                 if let Some(i) = up {
                     self.packs.swap(i, i - 1);
                 }
+                if self.packs.is_empty() {
+                    ui.label(egui::RichText::new(t("No pack: vanilla textures.")).weak());
+                }
+                if ui.button(t("Use the packs enabled in Minecraft")).clicked() {
+                    self.packs = assets::enabled_packs(&self.mc_dir);
+                }
+                let installed: Vec<PathBuf> =
+                    assets::installed_packs(&self.mc_dir).into_iter().filter(|p| !self.packs.contains(p)).collect();
+                if !installed.is_empty() {
+                    ui.collapsing(t("Installed packs"), |ui| {
+                        for p in installed {
+                            ui.horizontal(|ui| {
+                                if ui.small_button("➕").clicked() {
+                                    self.packs.push(p.clone());
+                                }
+                                ui.label(p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
+                            });
+                        }
+                    });
+                }
                 ui.horizontal(|ui| {
                     if ui.button(t("Add a pack (.zip)…")).clicked() {
                         if let Some(p) = rfd::FileDialog::new()
@@ -1003,7 +1252,7 @@ impl eframe::App for App {
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
         egui::Panel::right("export").default_size(300.0).resizable(true).show(ui, |ui| self.export_panel(ui));
-        egui::CentralPanel::no_frame().show(ui, |ui| self.map_view(ui));
+        egui::CentralPanel::no_frame().show(ui, |ui| self.central(ui));
         self.windows(&ctx);
     }
 }

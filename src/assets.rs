@@ -33,14 +33,12 @@ const PREFIXES: &[&str] = &[
 
 enum Layer {
     Mem(HashMap<String, Vec<u8>>),
-    Dir(PathBuf),
 }
 
 impl Layer {
     fn get(&self, path: &str) -> Option<Vec<u8>> {
         match self {
             Layer::Mem(m) => m.get(path).cloned(),
-            Layer::Dir(d) => fs::read(d.join(path)).ok(),
         }
     }
 }
@@ -52,8 +50,7 @@ fn load_zip(path: &Path, any_namespace: bool) -> Result<HashMap<String, Vec<u8>>
     for i in 0..z.len() {
         let mut e = z.by_index(i)?;
         let name = e.name()?.to_string();
-        let keep = PREFIXES.iter().any(|p| name.starts_with(p))
-            || (any_namespace && (name.starts_with("assets/") || name.starts_with("data/")));
+        let keep = PREFIXES.iter().any(|p| name.starts_with(p)) || (any_namespace && pack_file_wanted(&name));
         if keep && e.is_file() {
             let mut buf = Vec::with_capacity(e.size() as usize);
             e.read_to_end(&mut buf)?;
@@ -61,6 +58,158 @@ fn load_zip(path: &Path, any_namespace: bool) -> Result<HashMap<String, Vec<u8>>
         }
     }
     Ok(m)
+}
+
+/// Files of a resource pack that matter for rendering (sounds, languages… are skipped)
+fn pack_file_wanted(name: &str) -> bool {
+    if name.ends_with("pack.mcmeta") {
+        return true;
+    }
+    let Some(i) = name.find("assets/").or_else(|| name.find("data/")) else { return false };
+    let rest = &name[i..];
+    !(rest.contains("/sounds/") || rest.ends_with(".ogg") || rest.contains("/lang/") || rest.contains("/texts/") || rest.contains("/shaders/"))
+}
+
+fn load_dir(root: &Path) -> HashMap<String, Vec<u8>> {
+    let mut m = HashMap::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Ok(rel) = p.strip_prefix(root) {
+                let name = rel.to_string_lossy().replace('\\', "/");
+                if pack_file_wanted(&name) {
+                    if let Ok(b) = fs::read(&p) {
+                        m.insert(name, b);
+                    }
+                }
+            }
+        }
+    }
+    m
+}
+
+/// Resource pack format of a game jar (from its version.json), as major + minor / 1000
+fn jar_pack_format(jar: &Path) -> Option<f64> {
+    let f = fs::File::open(jar).ok()?;
+    let mut z = zip::ZipArchive::new(std::io::BufReader::new(f)).ok()?;
+    let mut e = z.by_name("version.json").ok()?;
+    let mut s = String::new();
+    e.read_to_string(&mut s).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+    let pv = v.get("pack_version")?;
+    if let Some(n) = pv.as_f64() {
+        return Some(n);
+    }
+    if let Some(n) = pv.get("resource").and_then(|n| n.as_f64()) {
+        return Some(n);
+    }
+    let major = pv.get("resource_major")?.as_f64()?;
+    let minor = pv.get("resource_minor").and_then(|n| n.as_f64()).unwrap_or(0.0);
+    Some(major + minor / 1000.0)
+}
+
+/// A pack format value: 42, or [major, minor]
+fn format_num(v: &serde_json::Value) -> Option<f64> {
+    match v {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::Array(a) => Some(a.first()?.as_f64()? + a.get(1).and_then(|m| m.as_f64()).unwrap_or(0.0) / 1000.0),
+        _ => None,
+    }
+}
+
+/// Does an overlay entry apply to this pack format?
+fn overlay_applies(e: &serde_json::Value, fmt: f64) -> bool {
+    let in_range = |lo: f64, hi: f64| fmt >= lo.floor() && fmt < hi.floor() + 1.0;
+    if let Some(f) = e.get("formats") {
+        return match f {
+            serde_json::Value::Number(n) => n.as_f64().map(|n| in_range(n, n)).unwrap_or(false),
+            serde_json::Value::Array(a) if a.len() == 2 => match (format_num(&a[0]), format_num(&a[1])) {
+                (Some(lo), Some(hi)) => in_range(lo, hi),
+                _ => false,
+            },
+            serde_json::Value::Object(o) => {
+                let lo = o.get("min_inclusive").and_then(format_num).unwrap_or(f64::MIN);
+                let hi = o.get("max_inclusive").and_then(format_num).unwrap_or(1e9);
+                in_range(lo, hi)
+            }
+            _ => false,
+        };
+    }
+    // 1.21.9+: min_format / max_format
+    let lo = e.get("min_format").and_then(format_num).unwrap_or(f64::MIN);
+    let hi = e.get("max_format").and_then(format_num).unwrap_or(1e9);
+    fmt >= lo && fmt < hi.floor() + 1.0
+}
+
+/// Loads a resource pack (zip or folder): strips a wrapping folder and applies the
+/// overlays that match the game version.
+fn load_pack(p: &Path, fmt: Option<f64>) -> Result<HashMap<String, Vec<u8>>> {
+    let raw = if p.is_dir() { load_dir(p) } else { load_zip(p, true)? };
+    // zips that wrap everything in a folder ("MyPack/assets/…")
+    let root = raw
+        .keys()
+        .filter_map(|k| k.strip_suffix("pack.mcmeta"))
+        .filter(|r| r.is_empty() || r.ends_with('/'))
+        .min_by_key(|r| r.len())
+        .map(|r| r.to_string())
+        .unwrap_or_default();
+    let base: HashMap<String, Vec<u8>> =
+        raw.into_iter().filter_map(|(k, v)| k.strip_prefix(&root).map(|r| (r.to_string(), v))).collect();
+    let mut out: HashMap<String, Vec<u8>> =
+        base.iter().filter(|(k, _)| k.starts_with("assets/") || k.starts_with("data/")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    // overlays: folders applied on top of the pack for some game versions
+    let meta: Option<serde_json::Value> = base.get("pack.mcmeta").and_then(|b| serde_json::from_slice(b).ok());
+    if let (Some(meta), Some(fmt)) = (meta, fmt) {
+        if let Some(entries) = meta.get("overlays").and_then(|o| o.get("entries")).and_then(|e| e.as_array()) {
+            for e in entries {
+                let Some(dir) = e.get("directory").and_then(|d| d.as_str()) else { continue };
+                if !overlay_applies(e, fmt) {
+                    continue;
+                }
+                let pre = format!("{dir}/");
+                for (k, v) in &base {
+                    if let Some(rest) = k.strip_prefix(&pre) {
+                        out.insert(rest.to_string(), v.clone());
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Resource packs enabled in the game (options.txt), highest priority first
+pub fn enabled_packs(mc_dir: &Path) -> Vec<PathBuf> {
+    let Ok(txt) = fs::read_to_string(mc_dir.join("options.txt")) else { return Vec::new() };
+    let Some(line) = txt.lines().find(|l| l.starts_with("resourcePacks:")) else { return Vec::new() };
+    let list: Vec<String> = serde_json::from_str(&line["resourcePacks:".len()..]).unwrap_or_default();
+    let mut v: Vec<PathBuf> = list
+        .iter()
+        .filter_map(|n| n.strip_prefix("file/"))
+        .map(|n| mc_dir.join("resourcepacks").join(n))
+        .filter(|p| p.exists())
+        .collect();
+    // options.txt lists packs from the bottom of the stack to the top
+    v.reverse();
+    v
+}
+
+/// Resource packs found in .minecraft/resourcepacks
+pub fn installed_packs(mc_dir: &Path) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = fs::read_dir(mc_dir.join("resourcepacks"))
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir() || p.extension().map(|e| e.eq_ignore_ascii_case("zip")).unwrap_or(false))
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
 }
 
 pub struct Texture {
@@ -105,14 +254,12 @@ pub fn parse_color(v: &serde_json::Value) -> Option<[u8; 3]> {
 impl Assets {
     pub fn load(jar: &Path, packs: &[PathBuf]) -> Result<Assets> {
         let mut layers = Vec::new();
-        for p in packs.iter().rev() {
-            if p.is_dir() {
-                layers.push(Layer::Dir(p.clone()));
-            } else if let Ok(m) = load_zip(p, true) {
+        let fmt = jar_pack_format(jar);
+        for p in packs {
+            if let Ok(m) = load_pack(p, fmt) {
                 layers.push(Layer::Mem(m));
             }
         }
-        layers.reverse();
         let jar_files = load_zip(jar, false)?;
         if !jar_files.contains_key("assets/minecraft/blockstates/stone.json") {
             return Err(anyhow!("{} does not contain the game resources", jar.display()));

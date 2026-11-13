@@ -711,5 +711,15 @@ fn legacy(s: &Value, reg: &Registry, ex: &mut Extra) -> Result<(String, Vec<(i32
         }
     }
     ex.bes.extend(tes);
+    // entities, with their pre-1.13 names and fields
+    if let Some(Value::List(l)) = get(s, "Entities") {
+        for v in l {
+            if let Some(p) = dvals(get(v, "Pos")) {
+                let mut e = make_entity(v, p);
+                crate::legacy::normalize_entity(&mut e, true);
+                ex.ents.push(e);
+            }
+        }
+    }
     Ok(("legacy MCEdit / WorldEdit (.schematic)".into(), out))
 }

@@ -28,11 +28,97 @@ fn tex_short(name: &str) -> String {
     if ns == "minecraft" { p } else { format!("{}_{}", ns.replace(':', "_"), p) }
 }
 
-struct TexImage {
-    w: u32,
-    h: u32,
-    rgba: Vec<u8>,
-    has_alpha: bool,
+pub struct TexImage {
+    pub w: u32,
+    pub h: u32,
+    pub rgba: Vec<u8>,
+    pub has_alpha: bool,
+    /// semi-transparent pixels (water, stained glass, clouds)
+    pub translucent: bool,
+}
+
+impl TexImage {
+    /// average color of the visible pixels
+    pub fn average(&self) -> [f32; 3] {
+        let (mut s, mut n) = ([0f32; 3], 0f32);
+        for p in self.rgba.chunks_exact(4) {
+            if p[3] > 0 {
+                s[0] += p[0] as f32;
+                s[1] += p[1] as f32;
+                s[2] += p[2] as f32;
+                n += 1.0;
+            }
+        }
+        if n > 0.0 { [s[0] / n / 255.0, s[1] / n / 255.0, s[2] / n / 255.0] } else { [1.0; 3] }
+    }
+
+    /// nearest-neighbour upscaling
+    pub fn upscaled(self, f: u32) -> TexImage {
+        if f <= 1 {
+            return self;
+        }
+        let (w2, h2) = (self.w * f, self.h * f);
+        let mut big = vec![0u8; (w2 * h2 * 4) as usize];
+        for y in 0..h2 {
+            for x in 0..w2 {
+                let si = (((y / f) * self.w + x / f) * 4) as usize;
+                let di = ((y * w2 + x) * 4) as usize;
+                big[di..di + 4].copy_from_slice(&self.rgba[si..si + 4]);
+            }
+        }
+        TexImage { w: w2, h: h2, rgba: big, ..self }
+    }
+}
+
+/// The texture of a material, with its tint applied
+pub fn material_image(reg: &Registry, m: &MatKey) -> TexImage {
+    let tname = reg.tex_name(m.tex);
+    let mut img = if tname == UNKNOWN_TEX {
+        unknown_tex()
+    } else {
+        match reg.assets.texture(&tname) {
+            Some(t) => TexImage { w: t.w, h: t.h, rgba: t.rgba.clone(), has_alpha: t.has_alpha, translucent: t.translucent },
+            None => unknown_tex(),
+        }
+    };
+    if let Some(c) = m.tint {
+        for p in img.rgba.chunks_exact_mut(4) {
+            p[0] = (p[0] as u32 * c[0] as u32 / 255) as u8;
+            p[1] = (p[1] as u32 * c[1] as u32 / 255) as u8;
+            p[2] = (p[2] as u32 * c[2] as u32 / 255) as u8;
+        }
+    }
+    img
+}
+
+/// Readable, unique material names
+pub fn material_names(reg: &Registry, mats: &[MatKey]) -> HashMap<MatKey, String> {
+    let mut per_tex: HashMap<u32, usize> = HashMap::new();
+    for m in mats {
+        *per_tex.entry(m.tex).or_default() += 1;
+    }
+    let mut names: HashMap<MatKey, String> = HashMap::new();
+    for m in mats {
+        let base = tex_short(&reg.tex_name(m.tex));
+        let name = match m.tint {
+            Some(c) if per_tex[&m.tex] > 1 => format!("{base}_{:02x}{:02x}{:02x}", c[0], c[1], c[2]),
+            _ => base,
+        };
+        names.insert(*m, name);
+    }
+    names
+}
+
+/// Offset applied to selection-relative coordinates, and scale
+pub fn placement(mesh: &Mesh, opts: &ExportOptions) -> ([f32; 3], f32) {
+    let sel = mesh.sel;
+    let (ox, oz) = match opts.offset_mode {
+        OffsetMode::None => (0.0, 0.0),
+        OffsetMode::Center => ((sel.x0 + sel.x1 + 1) as f32 / 2.0, (sel.z0 + sel.z1 + 1) as f32 / 2.0),
+        OffsetMode::Custom => (opts.offset_x as f32, opts.offset_z as f32),
+    };
+    let scale = if opts.scale > 0.0 { opts.scale } else { 1.0 };
+    ([sel.x0 as f32 - ox, 0.0, sel.z0 as f32 - oz], scale)
 }
 
 fn unknown_tex() -> TexImage {
@@ -43,7 +129,7 @@ fn unknown_tex() -> TexImage {
             rgba.extend_from_slice(if on { &[255, 0, 220, 255] } else { &[20, 20, 20, 255] });
         }
     }
-    TexImage { w: 16, h: 16, rgba, has_alpha: false }
+    TexImage { w: 16, h: 16, rgba, has_alpha: false, translucent: false }
 }
 
 pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &Path, world_name: &str, prog: &Progress) -> Result<ExportSummary> {
@@ -56,19 +142,7 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
     let mut mats: Vec<MatKey> = mesh.quads.iter().map(|q| q.mat).collect();
     mats.sort();
     mats.dedup();
-    let mut per_tex: HashMap<u32, usize> = HashMap::new();
-    for m in &mats {
-        *per_tex.entry(m.tex).or_default() += 1;
-    }
-    let mut names: HashMap<MatKey, String> = HashMap::new();
-    for m in &mats {
-        let base = tex_short(&reg.tex_name(m.tex));
-        let name = match m.tint {
-            Some(c) if per_tex[&m.tex] > 1 => format!("{base}_{:02x}{:02x}{:02x}", c[0], c[1], c[2]),
-            _ => base,
-        };
-        names.insert(*m, name);
-    }
+    let names = material_names(reg, &mats);
 
     // textures
     prog.set_stage(&crate::i18n::t("Writing textures"), mats.len());
@@ -78,47 +152,11 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
         fs::create_dir_all(&tex_dir).with_context(|| format!("creating {}", tex_dir.display()))?;
     }
     for m in &mats {
-        let tname = reg.tex_name(m.tex);
-        let mut img = if tname == UNKNOWN_TEX {
-            unknown_tex()
-        } else {
-            match reg.assets.texture(&tname) {
-                Some(t) => TexImage { w: t.w, h: t.h, rgba: t.rgba.clone(), has_alpha: t.has_alpha },
-                None => unknown_tex(),
-            }
-        };
-        if let Some(c) = m.tint {
-            for p in img.rgba.chunks_exact_mut(4) {
-                p[0] = (p[0] as u32 * c[0] as u32 / 255) as u8;
-                p[1] = (p[1] as u32 * c[1] as u32 / 255) as u8;
-                p[2] = (p[2] as u32 * c[2] as u32 / 255) as u8;
-            }
-        }
-        let (mut s, mut n) = ([0f32; 3], 0f32);
-        for p in img.rgba.chunks_exact(4) {
-            if p[3] > 0 {
-                s[0] += p[0] as f32;
-                s[1] += p[1] as f32;
-                s[2] += p[2] as f32;
-                n += 1.0;
-            }
-        }
-        avg.insert(*m, if n > 0.0 { [s[0] / n / 255.0, s[1] / n / 255.0, s[2] / n / 255.0] } else { [1.0; 3] });
+        let mut img = material_image(reg, m);
+        avg.insert(*m, img.average());
         has_alpha.insert(*m, img.has_alpha);
         if opts.export_textures {
-            let f = opts.prescale.max(1);
-            if f > 1 {
-                let (w2, h2) = (img.w * f, img.h * f);
-                let mut big = vec![0u8; (w2 * h2 * 4) as usize];
-                for y in 0..h2 {
-                    for x in 0..w2 {
-                        let si = (((y / f) * img.w + x / f) * 4) as usize;
-                        let di = ((y * w2 + x) * 4) as usize;
-                        big[di..di + 4].copy_from_slice(&img.rgba[si..si + 4]);
-                    }
-                }
-                img = TexImage { w: w2, h: h2, rgba: big, has_alpha: img.has_alpha };
-            }
+            img = img.upscaled(opts.prescale.max(1));
             let name = &names[m];
             image::save_buffer(tex_dir.join(format!("{name}.png")), &img.rgba, img.w, img.h, image::ColorType::Rgba8)?;
             if opts.alpha_separate && img.has_alpha {
@@ -159,13 +197,7 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
 
     // OBJ
     let sel = mesh.sel;
-    let (ox, oz) = match opts.offset_mode {
-        OffsetMode::None => (0.0, 0.0),
-        OffsetMode::Center => ((sel.x0 + sel.x1 + 1) as f32 / 2.0, (sel.z0 + sel.z1 + 1) as f32 / 2.0),
-        OffsetMode::Custom => (opts.offset_x as f32, opts.offset_z as f32),
-    };
-    let shift = [sel.x0 as f32 - ox, 0.0, sel.z0 as f32 - oz];
-    let scale = if opts.scale > 0.0 { opts.scale } else { 1.0 };
+    let (shift, scale) = placement(mesh, opts);
 
     let mut order: Vec<usize> = (0..mesh.quads.len()).collect();
     order.sort_by_key(|&i| {
@@ -248,4 +280,28 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
     drop(w);
     let obj_bytes = fs::metadata(obj_path).map(|m| m.len()).unwrap_or(0);
     Ok(ExportSummary { quads: mesh.quads.len(), vertices: vmap.len(), materials: mats.len(), obj_bytes })
+}
+
+/// Builds and writes the selection in the format chosen in the options.
+pub fn run_export(
+    reg: &Registry,
+    source: &crate::world::Source,
+    sel: crate::mesh::Selection,
+    opts: &ExportOptions,
+    out: &Path,
+    world_name: &str,
+    prog: &Progress,
+) -> Result<ExportSummary> {
+    use crate::mesh::ExportFormat;
+    match opts.format {
+        ExportFormat::Stl | ExportFormat::ThreeMf => crate::print::export_print(reg, source, sel, opts, out, prog),
+        f => {
+            let mesh = crate::mesh::build_mesh(reg, source, sel, opts, prog)?;
+            if f == ExportFormat::Glb {
+                crate::gltf::write_glb(reg, &mesh, opts, out, world_name, prog)
+            } else {
+                write_obj(reg, &mesh, opts, out, world_name, prog)
+            }
+        }
+    }
 }
