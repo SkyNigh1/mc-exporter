@@ -1,0 +1,113 @@
+# Builds MC Exporter for Windows, Linux and macOS.
+# On every push the three builds are checked; when a release is published,
+# the binaries are attached to it.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+          - os: ubuntu-22.04
+            name: linux
+          - os: macos-latest
+            name: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.name == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Linux libraries
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libudev-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build (Windows)
+        if: matrix.name == 'windows'
+        shell: bash
+        run: |
+          cargo build --release
+          mkdir dist
+          cp target/release/mc-exporter.exe dist/mc-exporter.exe
+
+      - name: Build (Linux)
+        if: matrix.name == 'linux'
+        run: |
+          cargo build --release
+          mkdir dist
+          tar -czf dist/mc-exporter-linux-x86_64.tar.gz -C target/release mc-exporter
+
+      - name: Build (macOS, universal app)
+        if: matrix.name == 'macos'
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          APP="MC Exporter.app"
+          mkdir -p "$APP/Contents/MacOS" dist
+          lipo -create -output "$APP/Contents/MacOS/mc-exporter" \
+            target/aarch64-apple-darwin/release/mc-exporter \
+            target/x86_64-apple-darwin/release/mc-exporter
+          cat > "$APP/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>MC Exporter</string>
+            <key>CFBundleDisplayName</key><string>MC Exporter</string>
+            <key>CFBundleExecutable</key><string>mc-exporter</string>
+            <key>CFBundleIdentifier</key><string>io.github.skynigh1.mc-exporter</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          EOF
+          sed -i '' 's/^          //' "$APP/Contents/Info.plist"
+          codesign --force --deep -s - "$APP"
+          ditto -c -k --keepParent "$APP" dist/mc-exporter-macos.zip
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          case "${{ matrix.name }}" in
+            windows) ./target/release/mc-exporter.exe --version ;;
+            linux) ./target/release/mc-exporter --version ;;
+            macos) "MC Exporter.app/Contents/MacOS/mc-exporter" --version ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mc-exporter-${{ matrix.name }}
+          path: dist/*
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber --repo "${{ github.repository }}"

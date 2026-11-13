@@ -85,7 +85,7 @@ fn skin_url_from_b64(v: &str) -> Option<String> {
 }
 
 fn our_cache() -> PathBuf {
-    std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_default().join("mc-exporter").join("skins")
+    crate::paths::app_dir().join("skins")
 }
 
 fn png_for_hash(hash: &str, url: &str, download: bool) -> Option<Vec<u8>> {

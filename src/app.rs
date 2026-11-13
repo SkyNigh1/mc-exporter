@@ -32,10 +32,11 @@ struct Config {
     lang: Lang,
     view_3d: bool,
     ignore_mods: bool,
+    no_update_check: bool,
 }
 
 fn config_path() -> PathBuf {
-    std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_default().join("mc-exporter").join("config.json")
+    crate::paths::app_dir().join("config.json")
 }
 
 struct RegionTile {
@@ -125,6 +126,10 @@ pub struct App {
     /// read blocks from the mods of the world's game folder
     use_mods: bool,
     mods: Vec<PathBuf>,
+    /// newer release found on GitHub
+    check_updates: bool,
+    update: Option<crate::update::Update>,
+    update_rx: Option<Receiver<Option<crate::update::Update>>>,
 }
 
 pub fn run() -> eframe::Result {
@@ -207,7 +212,17 @@ impl App {
             pv_drag: None,
             use_mods: !cfg.ignore_mods,
             mods: Vec::new(),
+            check_updates: !cfg.no_update_check,
+            update: None,
+            update_rx: None,
         };
+        if app.check_updates {
+            let (tx, rx) = unbounded();
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::update::check());
+            });
+            app.update_rx = Some(rx);
+        }
         if app.jars.is_empty() {
             app.status = t("No Minecraft version found in .minecraft/versions: launch the game once or pick a jar in the settings.");
         } else if std::path::Path::new(app.world_path.trim()).join("level.dat").is_file() {
@@ -229,6 +244,7 @@ impl App {
             lang: i18n::current(),
             view_3d: self.view_3d,
             ignore_mods: !self.use_mods,
+            no_update_check: !self.check_updates,
         };
         let p = config_path();
         let _ = std::fs::create_dir_all(p.parent().unwrap());
@@ -370,6 +386,12 @@ impl App {
     }
 
     fn poll_jobs(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.update_rx {
+            if let Ok(u) = rx.try_recv() {
+                self.update = u;
+                self.update_rx = None;
+            }
+        }
         if let Some(job) = &self.load_job {
             if let Ok(r) = job.rx.try_recv() {
                 self.load_job = None;
@@ -630,6 +652,13 @@ impl App {
                     i18n::set(lang);
                     self.save_config();
                 }
+                if let Some(u) = &self.update {
+                    let b = egui::Button::new(egui::RichText::new(tf("⬆ Version {0} available", &[&u.version])).color(Color32::BLACK))
+                        .fill(Color32::from_rgb(120, 200, 120));
+                    if ui.add(b).on_hover_text(t("Open the download page")).clicked() {
+                        crate::paths::open_url(&u.url);
+                    }
+                }
                 if ui.button(t("Settings")).clicked() {
                     self.show_settings = !self.show_settings;
                 }
@@ -889,7 +918,7 @@ impl App {
                     if let Some(p) = &self.last_export {
                         if ui.button(t("Open folder")).clicked() {
                             if let Some(d) = p.parent() {
-                                let _ = std::process::Command::new("explorer").arg(d).spawn();
+                                crate::paths::open_folder(d);
                             }
                         }
                     }
@@ -1267,6 +1296,9 @@ impl App {
                         });
                     }
                 }
+                ui.separator();
+                ui.checkbox(&mut self.check_updates, t("Check for a new version at startup"));
+                ui.label(egui::RichText::new(tf("Version {0}", &[&env!("CARGO_PKG_VERSION")])).weak());
                 ui.separator();
                 if ui.button(t("Apply and reload")).clicked() {
                     reload = true;

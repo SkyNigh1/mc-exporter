@@ -19,10 +19,12 @@ mod map;
 mod mesh;
 mod mobs;
 mod mobs2;
+mod paths;
 mod registry;
 mod schem;
 mod schem_out;
 mod skins;
+mod update;
 mod world;
 
 use std::path::PathBuf;
@@ -30,7 +32,7 @@ use std::sync::Arc;
 
 fn main() {
     std::panic::set_hook(Box::new(|info| {
-        let dir = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_default().join("mc-exporter");
+        let dir = paths::app_dir();
         let _ = std::fs::create_dir_all(&dir);
         let bt = std::backtrace::Backtrace::force_capture();
         let _ = std::fs::write(dir.join("crash.log"), format!("{info}\n\n{bt}"));
@@ -68,6 +70,14 @@ fn main() {
             _ => Vec::new(),
         };
         packs.extend(found);
+    }
+    if args.len() > 1 && args[1] == "--version" {
+        println!("MC Exporter {}", env!("CARGO_PKG_VERSION"));
+        match update::check() {
+            Some(u) => println!("version {} is available: {}", u.version, u.url),
+            None => println!("no newer version found"),
+        }
+        return;
     }
     if args.len() > 3 && args[1] == "--schem" {
         let r = (|| -> anyhow::Result<()> {

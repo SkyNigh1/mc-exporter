@@ -7,7 +7,7 @@ Exporter for **Minecraft Java** worlds and schematics to 3D models:
 - **STL** and **3MF** for **3D printing**: closed, manifold models at real size in millimetres;
 - **Sponge schematic (.schem)**, to take a build out of a world and paste it with WorldEdit.
 
-It is a native Windows desktop application: a single, self-contained `.exe`, with no Java, no browser and no installation. The idea is the same as jMc2Obj or Mineways, with two additions:
+It is a native desktop application for **Windows, Linux and macOS**: a single, self-contained program, with no Java, no browser and no installation. The idea is the same as jMc2Obj or Mineways, with two additions:
 
 - support for **every Java version**, from Beta worlds to the latest versions (26.x and the new `dimensions/` folder);
 - very broad **entity** support;
@@ -18,7 +18,17 @@ The interface is available in **English** (default), **French**, **Spanish**, **
 
 ## Download
 
-The latest version is available on the [Releases](https://github.com/SkyNigh1/mc-exporter/releases/latest) page. Download `mc-exporter.exe` and run it; there is nothing to install.
+The latest version is available on the [Releases](https://github.com/SkyNigh1/mc-exporter/releases/latest) page; there is nothing to install.
+
+| System | File | |
+|---|---|---|
+| Windows 10 / 11 (64-bit) | `mc-exporter.exe` | run it |
+| Linux (x86-64) | `mc-exporter-linux-x86_64.tar.gz` | extract it and run `./mc-exporter` |
+| macOS 11+ (Apple silicon and Intel) | `mc-exporter-macos.zip` | extract it and open **MC Exporter.app** |
+
+On macOS the app is not notarized by Apple: the first time, right-click it and choose **Open** (or allow it in *System Settings → Privacy & Security*).
+
+The application tells you when a new version is available (this check can be turned off in Settings).
 
 ---
 
@@ -264,13 +274,19 @@ Each material is named after its texture (`oak_planks`, `grass_block_top`…). B
 
 ## Building
 
-You need [Rust](https://rustup.rs) (2024 edition) and, on Windows, the Visual Studio C++ build tools.
+You need [Rust](https://rustup.rs) (2024 edition), plus:
+
+- on Windows, the Visual Studio C++ build tools;
+- on Linux, the X11 / Wayland development packages (on Debian or Ubuntu: `sudo apt install pkg-config libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libudev-dev`);
+- on macOS, the Xcode command line tools.
 
 ```sh
 cargo build --release
 ```
 
-The executable is written to `target/release/mc-exporter.exe`. The C runtime is statically linked (see `.cargo/config.toml`), so the exe runs on its own on any 64-bit Windows.
+The executable is written to `target/release/`. On Windows the C runtime is statically linked (see `.cargo/config.toml`), so the exe runs on its own on any 64-bit Windows. The three platforms are built by GitHub Actions (`.github/workflows/build.yml`), which attaches the binaries to each release.
+
+Settings, the crash log and the skin cache are kept in `%APPDATA%\mc-exporter` (Windows), `~/.config/mc-exporter` (Linux) or `~/Library/Application Support/mc-exporter` (macOS). The game folder is looked up in the standard place of each system (`.minecraft`, or `~/Library/Application Support/minecraft` on macOS).
 
 At runtime, the application needs **a version of Minecraft Java that has been launched at least once** on the machine, since it reads the game's resources from it. A `.jar` can also be selected manually in the Settings.
 

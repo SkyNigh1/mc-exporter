@@ -481,10 +481,7 @@ impl Assets {
 }
 
 pub fn minecraft_dir() -> PathBuf {
-    std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".minecraft")
+    crate::paths::minecraft_dir()
 }
 
 #[derive(Clone, Debug)]
