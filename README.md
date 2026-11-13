@@ -7,6 +7,10 @@ C'est un logiciel de bureau natif pour Windows : un seul `.exe` autonome, sans J
 - la compatibilité avec les **dernières versions** du jeu (26.x et le nouveau dossier `dimensions/`) ;
 - une prise en charge très large des **entités**.
 
+## Téléchargement
+
+La dernière version est disponible dans les [Releases](https://github.com/SkyNigh1/mc-exporter/releases/latest). Télécharge `mc-exporter.exe` et lance-le : il n'y a rien à installer.
+
 ---
 
 ## Sommaire
@@ -225,5 +229,9 @@ Le fichier `exemples/demo-entites.schem` contient un exemplaire de chaque bloc s
 - Pas de rendu des blocs de mods (seulement un cube damier).
 
 ---
+
+## Licence
+
+Distribué sous licence [MIT](LICENSE).
 
 *Projet indépendant, sans lien avec Mojang Studios ni Microsoft. Minecraft est une marque de Mojang Synergies AB. Aucune ressource du jeu n'est distribuée avec ce dépôt.*
