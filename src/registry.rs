@@ -103,6 +103,8 @@ pub struct BlockGeom {
     /// For each part, weighted variants (weight, quads)
     pub parts: Vec<Vec<(u32, Vec<Quad>)>>,
     pub occludes: [bool; 6],
+    /// the model covers the whole block (even with transparent pixels: leaves, glass)
+    pub full: bool,
     pub map_tex: Option<u32>,
     pub map_tint: Tint,
     pub fluid: Fluid,
@@ -192,6 +194,8 @@ fn tint_for(name: &str, key: &StateKey) -> Tint {
             let b = (p * p * 0.6 - 0.7).clamp(0.0, 1.0);
             Tint::Fixed([(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8])
         }
+        // mod blocks: leaves and vines take the foliage color, other tinted faces the grass color
+        n if n.contains(':') && (n.ends_with("leaves") || n.ends_with("vine") || n.ends_with("vines")) => Tint::Foliage,
         _ => Tint::Grass,
     }
 }
@@ -322,6 +326,10 @@ impl Registry {
         v.dedup();
         v.retain(|n| n != "minecraft:air");
         v
+    }
+
+    pub fn biome_name(&self, id: u16) -> String {
+        self.biomes.read().unwrap().list.get(id as usize).cloned().unwrap_or_else(|| "minecraft:plains".into())
     }
 
     pub fn biome_id(&self, name: &str) -> u16 {
@@ -648,6 +656,7 @@ impl Registry {
             name: name.clone(),
             parts: Vec::new(),
             occludes: [false; 6],
+            full: false,
             map_tex: None,
             map_tint: Tint::None,
             fluid: Fluid::None,
@@ -803,6 +812,7 @@ impl Registry {
         // occlusion and map color, from the first variant of each part
         let mut best_up: Option<(f32, u32, Tint)> = None;
         let mut any: Option<(u32, Tint)> = None;
+        let mut sides = [false; 6];
         for part in &g.parts {
             let Some((_, quads)) = part.first() else { continue };
             for q in quads {
@@ -818,6 +828,9 @@ impl Registry {
                     }
                 }
                 if let Some(d) = q.dir {
+                    if covers_side(q, d) {
+                        sides[d as usize] = true;
+                    }
                     let opaque = t.as_ref().map(|t| !t.has_alpha).unwrap_or(false);
                     if opaque && covers_side(q, d) {
                         g.occludes[d as usize] = true;
@@ -825,6 +838,7 @@ impl Registry {
                 }
             }
         }
+        g.full = sides.iter().all(|s| *s);
         if let Some((_, t, ti)) = best_up {
             g.map_tex = Some(t);
             g.map_tint = ti;

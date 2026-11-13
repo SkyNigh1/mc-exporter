@@ -40,6 +40,8 @@ pub struct PreviewMesh {
     pub batches: Vec<Batch>,
     /// half size of the bounding box (for the initial camera distance)
     pub radius: f32,
+    /// world position of the mesh origin
+    pub origin: [f32; 3],
     pub quads: usize,
 }
 
@@ -73,7 +75,8 @@ impl PreviewMesh {
             let (v, idx) = by_mat.entry(q.mat).or_default();
             let base = (v.len() / 6) as u32;
             for k in 0..4 {
-                v.extend_from_slice(&[p[k][0] - c[0], p[k][1] - c[1], p[k][2] - c[2], q.uv[k][0], 1.0 - q.uv[k][1], shade]);
+                let s = shade * q.light[k] as f32 / 255.0;
+                v.extend_from_slice(&[p[k][0] - c[0], p[k][1] - c[1], p[k][2] - c[2], q.uv[k][0], 1.0 - q.uv[k][1], s]);
             }
             idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
@@ -86,7 +89,8 @@ impl PreviewMesh {
             .collect();
         // opaque first, translucent last
         batches.sort_by_key(|b| b.translucent);
-        PreviewMesh { batches, radius, quads: mesh.quads.len() }
+        let origin = [sel.x0 as f32 + c[0], c[1], sel.z0 as f32 + c[2]];
+        PreviewMesh { batches, radius, origin, quads: mesh.quads.len() }
     }
 }
 
@@ -386,10 +390,113 @@ fn mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
 }
 
 /// Draws the preview in `rect` and handles the camera controls
-pub fn show(ui: &mut egui::Ui, rect: egui::Rect, cam: &mut Camera, mesh: &Option<Arc<PreviewMesh>>, generation: u64) {
+/// Selection box edited from the 3D view (inclusive block coordinates)
+pub struct BoxEdit<'a> {
+    pub min: &'a mut [i32; 3],
+    pub max: &'a mut [i32; 3],
+    /// handle being dragged and the fraction of block moved so far
+    pub drag: &'a mut Option<(usize, f32)>,
+}
+
+fn project(vp: &[f32; 16], p: [f32; 3], rect: egui::Rect) -> Option<egui::Pos2> {
+    let c = |r: usize| vp[r] * p[0] + vp[4 + r] * p[1] + vp[8 + r] * p[2] + vp[12 + r];
+    let w = c(3);
+    if w <= 1e-4 {
+        return None;
+    }
+    let (x, y) = (c(0) / w, c(1) / w);
+    Some(egui::pos2(rect.left() + (x + 1.0) * 0.5 * rect.width(), rect.top() + (1.0 - y) * 0.5 * rect.height()))
+}
+
+/// Center of face f (axis f / 2, min side when f is even), world coordinates
+fn face_center(min: &[i32; 3], max: &[i32; 3], f: usize) -> [f32; 3] {
+    let mut c = [0.0; 3];
+    for a in 0..3 {
+        c[a] = (min[a] as f32 + max[a] as f32 + 1.0) / 2.0;
+    }
+    let a = f / 2;
+    c[a] = if f % 2 == 0 { min[a] as f32 } else { max[a] as f32 + 1.0 };
+    c
+}
+
+pub fn show(ui: &mut egui::Ui, rect: egui::Rect, cam: &mut Camera, mesh: &Option<Arc<PreviewMesh>>, generation: u64, edit: Option<BoxEdit>) {
     let resp = ui.allocate_rect(rect, egui::Sense::click_and_drag());
     let radius = mesh.as_ref().map(|m| m.radius).unwrap_or(16.0);
-    if resp.dragged_by(egui::PointerButton::Primary) {
+    let vp = cam.view_proj(rect.width() / rect.height().max(1.0), radius);
+    ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, Frame { view_proj: vp, mesh: mesh.clone(), generation }));
+
+    // selection box and its 6 handles
+    let mut handle_drag = false;
+    if let Some(edit) = edit {
+        let origin = mesh.as_ref().map(|m| m.origin).unwrap_or_else(|| {
+            let c = face_center(edit.min, edit.max, 0);
+            [(edit.min[0] as f32 + edit.max[0] as f32 + 1.0) / 2.0, c[1], c[2]]
+        });
+        let to_local = |p: [f32; 3]| [p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]];
+        let painter = ui.painter_at(rect);
+        let lo = [edit.min[0] as f32, edit.min[1] as f32, edit.min[2] as f32];
+        let hi = [edit.max[0] as f32 + 1.0, edit.max[1] as f32 + 1.0, edit.max[2] as f32 + 1.0];
+        let corner = |i: usize| [if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }];
+        let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(255, 214, 60));
+        for i in 0..8usize {
+            for bit in [1usize, 2, 4] {
+                if i & bit == 0 {
+                    if let (Some(a), Some(b)) = (project(&vp, to_local(corner(i)), rect), project(&vp, to_local(corner(i | bit)), rect)) {
+                        painter.line_segment([a, b], stroke);
+                    }
+                }
+            }
+        }
+        let pointer = ui.input(|i| i.pointer.hover_pos());
+        let handles: Vec<Option<egui::Pos2>> = (0..6).map(|f| project(&vp, to_local(face_center(edit.min, edit.max, f)), rect)).collect();
+        let hovered = pointer.and_then(|p| {
+            (0..6).filter_map(|f| handles[f].map(|h| (f, h.distance(p)))).filter(|(_, d)| *d < 12.0).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(f, _)| f)
+        });
+        if resp.drag_started_by(egui::PointerButton::Primary) {
+            if let Some(f) = hovered {
+                *edit.drag = Some((f, 0.0));
+            }
+        }
+        if let Some((f, acc)) = edit.drag.as_mut() {
+            if resp.dragged_by(egui::PointerButton::Primary) {
+                handle_drag = true;
+                let a = *f / 2;
+                let c = face_center(edit.min, edit.max, *f);
+                let mut c2 = c;
+                c2[a] += 1.0;
+                if let (Some(p1), Some(p2)) = (project(&vp, to_local(c), rect), project(&vp, to_local(c2), rect)) {
+                    let dir = p2 - p1;
+                    let len2 = dir.length_sq();
+                    if len2 > 0.25 {
+                        *acc += resp.drag_delta().dot(dir) / len2;
+                    }
+                }
+                while acc.abs() >= 1.0 {
+                    let step = acc.signum() as i32;
+                    *acc -= step as f32;
+                    if *f % 2 == 0 {
+                        edit.min[a] = (edit.min[a] + step).min(edit.max[a]);
+                    } else {
+                        edit.max[a] = (edit.max[a] + step).max(edit.min[a]);
+                    }
+                }
+            }
+        }
+        if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+            *edit.drag = None;
+        }
+        for (f, h) in handles.iter().enumerate() {
+            let Some(h) = h else { continue };
+            let active = edit.drag.map(|d| d.0 == f).unwrap_or(false) || hovered == Some(f);
+            let color = if active { egui::Color32::WHITE } else { egui::Color32::from_rgb(255, 214, 60) };
+            painter.circle(*h, if active { 8.0 } else { 6.0 }, color, egui::Stroke::new(1.5, egui::Color32::from_gray(30)));
+        }
+        if hovered.is_some() || edit.drag.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+    }
+
+    if resp.dragged_by(egui::PointerButton::Primary) && !handle_drag {
         let d = resp.drag_delta();
         cam.yaw += d.x * 0.008;
         cam.pitch = (cam.pitch + d.y * 0.008).clamp(-1.55, 1.55);
@@ -407,6 +514,4 @@ pub fn show(ui: &mut egui::Ui, rect: egui::Rect, cam: &mut Camera, mesh: &Option
     if resp.double_clicked() {
         *cam = Camera::new(radius);
     }
-    let vp = cam.view_proj(rect.width() / rect.height().max(1.0), radius);
-    ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, Frame { view_proj: vp, mesh: mesh.clone(), generation }));
 }

@@ -287,7 +287,7 @@ pub fn export_print(reg: &Registry, source: &Source, sel: Selection, opts: &Expo
         ExportFormat::ThreeMf => write_3mf(path, &verts, &tris, &colors)?,
         _ => write_stl(path, &verts, &tris)?,
     };
-    Ok(ExportSummary { quads: tris.len(), vertices: verts.len(), materials: colors.len(), obj_bytes: bytes })
+    Ok(ExportSummary { quads: tris.len(), vertices: verts.len(), materials: colors.len(), obj_bytes: bytes, unknown: Vec::new() })
 }
 
 /// Joins cells that touch only by an edge or a corner (non-manifold for slicers)

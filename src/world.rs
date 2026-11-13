@@ -584,6 +584,7 @@ pub fn flatten_passengers(e: &fastnbt::Value, out: &mut Vec<fastnbt::Value>) {
 pub fn build_chunks(
     blocks: impl Iterator<Item = (i32, i32, i32, u32)>,
     mut bes: HashMap<(i32, i32, i32), fastnbt::Value>,
+    biome_at: Option<&dyn Fn(i32, i32, i32) -> u16>,
 ) -> HashMap<(i32, i32), Arc<Chunk>> {
     let mut secs: HashMap<(i32, i32), HashMap<i32, Vec<u32>>> = HashMap::new();
     for (x, y, z, id) in blocks {
@@ -595,7 +596,19 @@ pub fn build_chunks(
     }
     secs.into_iter()
         .map(|((cx, cz), m)| {
-            let mut sections: Vec<Section> = m.into_iter().map(|(y, blocks)| Section { y, blocks, biomes: vec![0] }).collect();
+            let mut sections: Vec<Section> = m
+                .into_iter()
+                .map(|(y, blocks)| {
+                    // 4×4×4 biome cells, sampled at their lowest corner
+                    let biomes = match biome_at {
+                        Some(f) => (0..64)
+                            .map(|c| f(cx * 16 + (c % 4) * 4, y * 16 + (c / 16) * 4, cz * 16 + ((c / 4) % 4) * 4))
+                            .collect(),
+                        None => vec![0],
+                    };
+                    Section { y, blocks, biomes }
+                })
+                .collect();
             sections.sort_by_key(|s| s.y);
             let block_entities: HashMap<(i32, i32, i32), fastnbt::Value> = bes
                 .keys()

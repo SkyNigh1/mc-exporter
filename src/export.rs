@@ -14,6 +14,8 @@ pub struct ExportSummary {
     pub vertices: usize,
     pub materials: usize,
     pub obj_bytes: u64,
+    /// blocks and entities this version cannot draw
+    pub unknown: Vec<String>,
 }
 
 fn fmt(v: f32) -> String {
@@ -91,6 +93,86 @@ pub fn material_image(reg: &Registry, m: &MatKey) -> TexImage {
     img
 }
 
+/// PBR maps converted from a LabPBR resource pack, at the size of the base texture
+pub struct PbrMaps {
+    /// tangent-space normal map, OpenGL convention (green up)
+    pub normal: Option<TexImage>,
+    /// roughness (grey), metallic (grey), glTF metallic-roughness (G = roughness, B = metallic)
+    pub roughness: Option<TexImage>,
+    pub metallic: Option<TexImage>,
+    pub metal_rough: Option<TexImage>,
+    /// emitted color (base color × emission strength)
+    pub emissive: Option<TexImage>,
+}
+
+fn raw_pbr(reg: &Registry, m: &MatKey, suffix: &str, w: u32, h: u32) -> Option<Vec<u8>> {
+    let name = reg.tex_name(m.tex);
+    let t = reg.assets.texture(&format!("{name}{suffix}"))?;
+    let mut out = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let si = (((y * t.h / h) * t.w + x * t.w / w) * 4) as usize;
+            let di = ((y * w + x) * 4) as usize;
+            out[di..di + 4].copy_from_slice(&t.rgba[si..si + 4]);
+        }
+    }
+    Some(out)
+}
+
+fn grey(w: u32, h: u32, v: impl Iterator<Item = u8>) -> TexImage {
+    let rgba = v.flat_map(|g| [g, g, g, 255]).collect();
+    TexImage { w, h, rgba, has_alpha: false, translucent: false }
+}
+
+/// LabPBR maps (`<texture>_n.png`, `<texture>_s.png`) of a material, converted
+pub fn pbr_maps(reg: &Registry, m: &MatKey, base: &TexImage) -> Option<PbrMaps> {
+    let (w, h) = (base.w, base.h);
+    let n = raw_pbr(reg, m, "_n", w, h);
+    let sp = raw_pbr(reg, m, "_s", w, h);
+    if n.is_none() && sp.is_none() {
+        return None;
+    }
+    let mut maps = PbrMaps { normal: None, roughness: None, metallic: None, metal_rough: None, emissive: None };
+    if let Some(n) = n {
+        // red = X, green = Y (DirectX, pointing down), Z rebuilt from X and Y
+        let rgba = n
+            .chunks_exact(4)
+            .flat_map(|p| {
+                let x = p[0] as f32 / 127.5 - 1.0;
+                let y = -(p[1] as f32 / 127.5 - 1.0);
+                let z = (1.0 - x * x - y * y).max(0.0).sqrt();
+                [((x + 1.0) * 127.5) as u8, ((y + 1.0) * 127.5) as u8, ((z + 1.0) * 127.5) as u8, 255]
+            })
+            .collect();
+        maps.normal = Some(TexImage { w, h, rgba, has_alpha: false, translucent: false });
+    }
+    if let Some(sp) = sp {
+        // red = perceptual smoothness, green ≥ 230 = metal, alpha 0–254 = emission (255 = none)
+        let rough: Vec<u8> = sp.chunks_exact(4).map(|p| ((1.0 - p[0] as f32 / 255.0).powi(2) * 255.0) as u8).collect();
+        let metal: Vec<u8> = sp.chunks_exact(4).map(|p| if p[1] >= 230 { 255 } else { 0 }).collect();
+        let emit: Vec<f32> = sp.chunks_exact(4).map(|p| if p[3] < 255 { p[3] as f32 / 254.0 } else { 0.0 }).collect();
+        maps.metal_rough = Some(TexImage {
+            w,
+            h,
+            rgba: rough.iter().zip(&metal).flat_map(|(r, m)| [0, *r, *m, 255]).collect(),
+            has_alpha: false,
+            translucent: false,
+        });
+        maps.roughness = Some(grey(w, h, rough.into_iter()));
+        maps.metallic = Some(grey(w, h, metal.into_iter()));
+        if emit.iter().any(|e| *e > 0.0) {
+            let rgba = base
+                .rgba
+                .chunks_exact(4)
+                .zip(&emit)
+                .flat_map(|(p, e)| [(p[0] as f32 * e) as u8, (p[1] as f32 * e) as u8, (p[2] as f32 * e) as u8, 255])
+                .collect();
+            maps.emissive = Some(TexImage { w, h, rgba, has_alpha: false, translucent: false });
+        }
+    }
+    Some(maps)
+}
+
 /// Readable, unique material names
 pub fn material_names(reg: &Registry, mats: &[MatKey]) -> HashMap<MatKey, String> {
     let mut per_tex: HashMap<u32, usize> = HashMap::new();
@@ -147,6 +229,7 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
     // textures
     prog.set_stage(&crate::i18n::t("Writing textures"), mats.len());
     let mut has_alpha: HashMap<MatKey, bool> = HashMap::new();
+    let mut pbr: HashMap<MatKey, (bool, bool, bool)> = HashMap::new();
     let mut avg: HashMap<MatKey, [f32; 3]> = HashMap::new();
     if opts.export_textures {
         fs::create_dir_all(&tex_dir).with_context(|| format!("creating {}", tex_dir.display()))?;
@@ -155,6 +238,23 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
         let mut img = material_image(reg, m);
         avg.insert(*m, img.average());
         has_alpha.insert(*m, img.has_alpha);
+        if opts.export_textures && opts.pbr {
+            if let Some(maps) = pbr_maps(reg, m, &img) {
+                let name = &names[m];
+                let f = opts.prescale.max(1);
+                let mut save = |img: Option<TexImage>, suffix: &str| -> Result<bool> {
+                    let Some(i) = img else { return Ok(false) };
+                    let i = i.upscaled(f);
+                    image::save_buffer(tex_dir.join(format!("{name}{suffix}.png")), &i.rgba, i.w, i.h, image::ColorType::Rgba8)?;
+                    Ok(true)
+                };
+                let n = save(maps.normal, "_normal")?;
+                let r = save(maps.roughness, "_rough")?;
+                save(maps.metallic, "_metal")?;
+                let e = save(maps.emissive, "_emit")?;
+                pbr.insert(*m, (n, r, e));
+            }
+        }
         if opts.export_textures {
             img = img.upscaled(opts.prescale.max(1));
             let name = &names[m];
@@ -181,6 +281,18 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
             let _ = writeln!(mtl, "Kd {:.3} {:.3} {:.3}", a[0], a[1], a[2]);
         }
         let _ = writeln!(mtl, "Ka 0.000 0.000 0.000\nKs 0.000 0.000 0.000\nNs 0\nillum 1\nd 1.0");
+        if let Some(&(n, r, e)) = pbr.get(m) {
+            // PBR extension of the MTL format (read by Blender and most recent importers)
+            if n {
+                let _ = writeln!(mtl, "map_Bump -bm 1.0 {tex_dir_name}/{name}_normal.png");
+            }
+            if r {
+                let _ = writeln!(mtl, "map_Pr {tex_dir_name}/{name}_rough.png\nmap_Pm {tex_dir_name}/{name}_metal.png");
+            }
+            if e {
+                let _ = writeln!(mtl, "Ke 1.000 1.000 1.000\nmap_Ke {tex_dir_name}/{name}_emit.png");
+            }
+        }
         if opts.export_textures {
             let _ = writeln!(mtl, "map_Kd {tex_dir_name}/{name}.png");
             if has_alpha[m] {
@@ -213,7 +325,7 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
     writeln!(w, "# Selection: x {}..{}  y {}..{}  z {}..{}", sel.x0, sel.x1, sel.y0, sel.y1, sel.z0, sel.z1)?;
     writeln!(w, "mtllib {mtl_name}")?;
 
-    let mut vmap: HashMap<[i32; 3], usize> = HashMap::new();
+    let mut vmap: HashMap<[i32; 4], usize> = HashMap::new();
     let mut tmap: HashMap<[i32; 2], usize> = HashMap::new();
     let mut nmap: HashMap<[i32; 3], usize> = HashMap::new();
     let mut body = String::with_capacity(1 << 20);
@@ -255,10 +367,17 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
         let _ = write!(body, "f");
         for k in 0..4 {
             let wp = [(p[k][0] + shift[0]) * scale, (p[k][1] + shift[1]) * scale, (p[k][2] + shift[2]) * scale];
-            let vk = wp.map(|c| (c * 65536.0).round() as i32);
+            let light = if opts.ambient_occlusion { q.light[k] } else { 255 };
+            let vk = [(wp[0] * 65536.0).round() as i32, (wp[1] * 65536.0).round() as i32, (wp[2] * 65536.0).round() as i32, light as i32];
             let vl = vmap.len() + 1;
             let vi = *vmap.entry(vk).or_insert_with(|| {
-                let _ = writeln!(w, "v {} {} {}", fmt(wp[0]), fmt(wp[1]), fmt(wp[2]));
+                if opts.ambient_occlusion {
+                    // vertex colors (extension read by Blender, MeshLab, ZBrush…)
+                    let c = light as f32 / 255.0;
+                    let _ = writeln!(w, "v {} {} {} {c:.3} {c:.3} {c:.3}", fmt(wp[0]), fmt(wp[1]), fmt(wp[2]));
+                } else {
+                    let _ = writeln!(w, "v {} {} {}", fmt(wp[0]), fmt(wp[1]), fmt(wp[2]));
+                }
                 vl
             });
             let uv = q.uv[k];
@@ -279,7 +398,7 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
     w.flush()?;
     drop(w);
     let obj_bytes = fs::metadata(obj_path).map(|m| m.len()).unwrap_or(0);
-    Ok(ExportSummary { quads: mesh.quads.len(), vertices: vmap.len(), materials: mats.len(), obj_bytes })
+    Ok(ExportSummary { quads: mesh.quads.len(), vertices: vmap.len(), materials: mats.len(), obj_bytes, unknown: mesh.unknown.clone() })
 }
 
 /// Builds and writes the selection in the format chosen in the options.
@@ -295,8 +414,13 @@ pub fn run_export(
     use crate::mesh::ExportFormat;
     match opts.format {
         ExportFormat::Stl | ExportFormat::ThreeMf => crate::print::export_print(reg, source, sel, opts, out, prog),
+        ExportFormat::Schem => crate::schem_out::write(reg, source, sel, opts, out, prog),
         f => {
-            let mesh = crate::mesh::build_mesh(reg, source, sel, opts, prog)?;
+            let mut mesh = crate::mesh::build_mesh(reg, source, sel, opts, prog)?;
+            if opts.atlas {
+                prog.set_stage(&crate::i18n::t("Building the texture atlas"), 1);
+                crate::atlas::apply(reg, &mut mesh, opts.pbr);
+            }
             if f == ExportFormat::Glb {
                 crate::gltf::write_glb(reg, &mesh, opts, out, world_name, prog)
             } else {

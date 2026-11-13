@@ -2,6 +2,7 @@
 
 mod app;
 mod assets;
+mod atlas;
 mod bent;
 mod clouds;
 mod deco;
@@ -20,6 +21,7 @@ mod mobs;
 mod mobs2;
 mod registry;
 mod schem;
+mod schem_out;
 mod skins;
 mod world;
 
@@ -37,6 +39,8 @@ fn main() {
     let raw: Vec<String> = std::env::args().collect();
     // options: --pack <path> (repeatable), --hide-cavities, --detail <1|2|4>, --block-mm <mm>, --hollow <blocks>, --no-clouds
     let mut packs: Vec<PathBuf> = Vec::new();
+    let mut mods_dir: Option<PathBuf> = None;
+    let mut no_mods = false;
     let mut opts = mesh::ExportOptions::default();
     let mut args: Vec<String> = Vec::new();
     let mut it = raw.into_iter();
@@ -48,8 +52,22 @@ fn main() {
             "--detail" => opts.print_detail = it.next().and_then(|v| v.parse().ok()).unwrap_or(2),
             "--block-mm" => opts.print_block_mm = it.next().and_then(|v| v.parse().ok()).unwrap_or(1.0),
             "--hollow" => opts.print_hollow = it.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+            "--mods" => mods_dir = it.next().map(PathBuf::from),
+            "--no-mods" => no_mods = true,
+            "--ao" => opts.ambient_occlusion = true,
+            "--atlas" => opts.atlas = true,
             _ => args.push(a),
         }
+    }
+    // mods: --mods <folder>, else the mods folder next to the world's saves folder
+    let world_arg = if args.len() > 2 && args[1] == "--export" { Some(PathBuf::from(&args[2])) } else { None };
+    if !no_mods {
+        let found = match (&mods_dir, &world_arg) {
+            (Some(d), _) => assets::find_mods(d),
+            (None, Some(w)) => assets::find_mods(w),
+            _ => Vec::new(),
+        };
+        packs.extend(found);
     }
     if args.len() > 3 && args[1] == "--schem" {
         let r = (|| -> anyhow::Result<()> {
@@ -67,8 +85,10 @@ fn main() {
             opts.format = out.extension().and_then(|e| mesh::ExportFormat::from_ext(&e.to_string_lossy())).unwrap_or(mesh::ExportFormat::Obj);
             let prog = mesh::Progress::new();
             let r = export::run_export(&reg, &source, sel, &opts, &out, &s.name, &prog)?;
-            let unknown: Vec<String> = (0..reg.state_count() as u32).filter(|&i| reg.geom(i).unknown).map(|i| reg.state(i).name).collect();
-            println!("{}: {} faces, {} materials, {:.1} MB in {:?}; unknown blocks: {:?}", opts.format.ext(), r.quads, r.materials, r.obj_bytes as f64 / 1e6, t0.elapsed(), unknown);
+            println!("{}: {} faces, {} materials, {:.1} MB in {:?}", opts.format.ext(), r.quads, r.materials, r.obj_bytes as f64 / 1e6, t0.elapsed());
+            if !r.unknown.is_empty() {
+                println!("not drawn by this version: {}", r.unknown.join(", "));
+            }
             Ok(())
         })();
         if let Err(e) = r {
@@ -122,5 +142,8 @@ fn cli(a: &[String], packs: &[PathBuf], mut opts: mesh::ExportOptions) -> anyhow
         s.obj_bytes as f64 / 1e6,
         t0.elapsed()
     );
+    if !s.unknown.is_empty() {
+        println!("not drawn by this version: {}", s.unknown.join(", "));
+    }
     Ok(())
 }

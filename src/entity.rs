@@ -254,6 +254,68 @@ fn living_base(pos: [f64; 3], yaw: f32) -> Pose {
     Pose::new().t(pos[0] as f32, pos[1] as f32, pos[2] as f32).ry(180.0 - yaw).s(-1.0, -1.0, 1.0).t(0.0, -1.501, 0.0)
 }
 
+thread_local! {
+    /// set when the last entity_quads call met an entity it cannot draw
+    static UNHANDLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Full id of an entity ("minecraft:pig")
+pub fn entity_id(ent: &Value) -> Option<String> {
+    string(get(Some(ent), "id")).map(|s| if s.contains(':') { s } else { format!("minecraft:{s}") })
+}
+
+/// Entity categories that can be left out of an export
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub enum EntityKind {
+    Mob,
+    ArmorStand,
+    Frame,
+    Display,
+    Vehicle,
+    Item,
+    Projectile,
+    Other,
+}
+
+pub const ENTITY_KINDS: [EntityKind; 8] = [
+    EntityKind::Mob,
+    EntityKind::ArmorStand,
+    EntityKind::Frame,
+    EntityKind::Display,
+    EntityKind::Vehicle,
+    EntityKind::Item,
+    EntityKind::Projectile,
+    EntityKind::Other,
+];
+
+pub fn kind(ent: &Value) -> EntityKind {
+    let id = entity_id(ent).unwrap_or_default();
+    let s = short(&id);
+    match s {
+        "armor_stand" => EntityKind::ArmorStand,
+        "item_frame" | "glow_item_frame" | "painting" => EntityKind::Frame,
+        "block_display" | "item_display" | "text_display" => EntityKind::Display,
+        "item" | "experience_orb" => EntityKind::Item,
+        "arrow" | "spectral_arrow" | "trident" | "snowball" | "egg" | "ender_pearl" | "fireball" | "small_fireball"
+        | "dragon_fireball" | "wither_skull" | "shulker_bullet" | "llama_spit" | "firework_rocket" | "potion"
+        | "splash_potion" | "lingering_potion" | "experience_bottle" | "wind_charge" | "breeze_wind_charge"
+        | "eye_of_ender" | "fishing_bobber" => EntityKind::Projectile,
+        "leash_knot" | "end_crystal" | "falling_block" | "tnt" | "evoker_fangs" | "area_effect_cloud" | "marker"
+        | "interaction" | "lightning_bolt" => EntityKind::Other,
+        _ if s.ends_with("minecart") || s.ends_with("boat") || s.ends_with("raft") => EntityKind::Vehicle,
+        _ => EntityKind::Mob,
+    }
+}
+
+/// Like entity_quads, and tells whether the entity type is known to this version
+pub fn entity_quads_checked(reg: &Registry, font: &Font, ent: &Value, o: &EntOpts) -> (Vec<Quad>, bool) {
+    UNHANDLED.with(|u| u.set(false));
+    let q = entity_quads(reg, font, ent, o);
+    let modded = entity_id(ent).map(|id| !id.starts_with("minecraft:")).unwrap_or(false);
+    let known = !UNHANDLED.with(|u| u.get()) && !(modded && q.is_empty());
+    (q, known)
+}
+
 /// Quads of an entity, in world coordinates
 pub fn entity_quads(reg: &Registry, font: &Font, ent: &Value, o: &EntOpts) -> Vec<Quad> {
     let mut out = Vec::new();
@@ -691,7 +753,10 @@ fn animal(reg: &Registry, id: &str, ent: &Value, pos: [f64; 3], yaw: f32, out: &
             bx(out, &p, &sk, (32., 8.), [0., 21., -3.5], [1., 1., 1.]);
             bx(out, &p, &sk, (0., 0.), [-4., 16., -4.], [8., 8., 8.]);
         }
-        _ => {}
+        // entities without a body, or not drawn by the game
+        "marker" | "area_effect_cloud" | "interaction" | "lightning_bolt" | "evoker_fangs" | "fishing_bobber" | "eye_of_ender"
+        | "player" => {}
+        _ => UNHANDLED.with(|u| u.set(true)),
     }
 }
 

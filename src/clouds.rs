@@ -39,7 +39,7 @@ pub fn cloud_quads(reg: &Registry, sel: Selection, height: f32, per_chunk: bool)
                 let e2 = [p[3][0] - p[0][0], p[3][1] - p[0][1], p[3][2] - p[0][2]];
                 let c = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
                 let p = if c[0] * n[0] + c[1] * n[1] + c[2] * n[2] < 0.0 { [p[0], p[3], p[2], p[1]] } else { p };
-                out.push(OutQuad { pos: p, uv: [[0., 0.], [1., 0.], [1., 1.], [0., 1.]], mat, group });
+                out.push(OutQuad { pos: p, uv: [[0., 0.], [1., 0.], [1., 1.], [0., 1.]], mat, group, light: [255; 4] });
             };
             face([[fxa, y1, fza], [fxb, y1, fza], [fxb, y1, fzb], [fxa, y1, fzb]], [0., 1., 0.]);
             face([[fxa, y0, fza], [fxb, y0, fza], [fxb, y0, fzb], [fxa, y0, fzb]], [0., -1., 0.]);

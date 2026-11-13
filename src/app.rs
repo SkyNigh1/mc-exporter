@@ -31,6 +31,7 @@ struct Config {
     last_export: Option<PathBuf>,
     lang: Lang,
     view_3d: bool,
+    ignore_mods: bool,
 }
 
 fn config_path() -> PathBuf {
@@ -59,6 +60,9 @@ struct Loaded {
     info: WorldInfo,
     reg: Arc<Registry>,
     schem: Option<SchemInfo>,
+    /// jar and layers (packs, then mods) the registry was built from
+    key: (PathBuf, Vec<PathBuf>),
+    mods: Vec<PathBuf>,
 }
 
 struct LoadJob {
@@ -117,6 +121,10 @@ pub struct App {
     pv_key: String,
     pv_job: Option<(Receiver<Result<Arc<crate::preview::PreviewMesh>, String>>, Arc<Progress>)>,
     pv_status: String,
+    pv_drag: Option<(usize, f32)>,
+    /// read blocks from the mods of the world's game folder
+    use_mods: bool,
+    mods: Vec<PathBuf>,
 }
 
 pub fn run() -> eframe::Result {
@@ -196,6 +204,9 @@ impl App {
             pv_key: String::new(),
             pv_job: None,
             pv_status: String::new(),
+            pv_drag: None,
+            use_mods: !cfg.ignore_mods,
+            mods: Vec::new(),
         };
         if app.jars.is_empty() {
             app.status = t("No Minecraft version found in .minecraft/versions: launch the game once or pick a jar in the settings.");
@@ -217,6 +228,7 @@ impl App {
             last_export: self.last_export.clone(),
             lang: i18n::current(),
             view_3d: self.view_3d,
+            ignore_mods: !self.use_mods,
         };
         let p = config_path();
         let _ = std::fs::create_dir_all(p.parent().unwrap());
@@ -250,6 +262,8 @@ impl App {
         let jars = self.jars.clone();
         let jar_override = self.jar_override.clone();
         let packs = self.packs.clone();
+        let use_mods = self.use_mods;
+        let mc_dir = self.mc_dir.clone();
         let reuse = self.reg.clone();
         let prev_key = self.loaded_assets_key.clone();
         let (tx, rx) = unbounded();
@@ -276,17 +290,28 @@ impl App {
                         }
                     },
                 };
-                let key = (jar.clone(), packs.clone());
-                // keep the registry if the jar and the packs did not change
+                // mods of the world's game folder (or of .minecraft for a schematic)
+                let mods = if !use_mods {
+                    Vec::new()
+                } else {
+                    match &target {
+                        LoadTarget::World(p) => assets::find_mods(p),
+                        LoadTarget::Schem(_) => assets::find_mods(&mc_dir),
+                    }
+                };
+                let mut layers = packs.clone();
+                layers.extend(mods.iter().cloned());
+                let key = (jar.clone(), layers.clone());
+                // keep the registry if the jar, the packs and the mods did not change
                 let reg = match (reuse, prev_key) {
                     (Some(r), Some(k)) if k == key => r,
                     _ => {
-                        let a = Assets::load(&jar, &packs).map_err(|e| format!("{e:#}"))?;
+                        let a = Assets::load(&jar, &layers).map_err(|e| format!("{e:#}"))?;
                         Arc::new(Registry::new(Arc::new(a)))
                     }
                 };
                 match target {
-                    LoadTarget::World(_) => Ok(Loaded { info: world.unwrap(), reg, schem: None }),
+                    LoadTarget::World(_) => Ok(Loaded { info: world.unwrap(), reg, schem: None, key, mods }),
                     LoadTarget::Schem(p) => {
                         let s = schem::load(&p, &reg).map_err(|e| format!("{e:#}"))?;
                         let info = WorldInfo {
@@ -296,7 +321,7 @@ impl App {
                             spawn: (s.size[0] / 2, s.size[2] / 2),
                             dims: vec![world::DimInfo { id: "schematic".into(), source: Source::Mem(Arc::new(s.world)) }],
                         };
-                        Ok(Loaded { info, reg, schem: Some(SchemInfo { format: s.format, size: s.size, blocks: s.blocks }) })
+                        Ok(Loaded { info, reg, schem: Some(SchemInfo { format: s.format, size: s.size, blocks: s.blocks }), key, mods })
                     }
                 }
             })();
@@ -349,9 +374,10 @@ impl App {
             if let Ok(r) = job.rx.try_recv() {
                 self.load_job = None;
                 match r {
-                    Ok(Loaded { info, reg, schem: Some(si) }) => {
+                    Ok(Loaded { info, reg, schem: Some(si), key, mods }) => {
                         let jar = reg.assets.jar_path.clone();
-                        self.loaded_assets_key = Some((jar.clone(), self.packs.clone()));
+                        self.loaded_assets_key = Some(key);
+                        self.mods = mods;
                         self.status = tf(
                             "Schematic “{0}” — {1} — {2} × {3} × {4} — {5} blocks — resources: {6}",
                             &[
@@ -375,9 +401,10 @@ impl App {
                         self.reg = Some(reg);
                         self.start_map();
                     }
-                    Ok(Loaded { info, reg, schem: None }) => {
+                    Ok(Loaded { info, reg, schem: None, key, mods }) => {
                         let jar = reg.assets.jar_path.clone();
-                        self.loaded_assets_key = Some((jar.clone(), self.packs.clone()));
+                        self.loaded_assets_key = Some(key);
+                        self.mods = mods;
                         self.status = tf(
                             "“{0}” — Minecraft {1} — resources: {2}",
                             &[
@@ -474,6 +501,7 @@ impl App {
             ExportFormat::Glb => "glTF binary",
             ExportFormat::Stl => "STL",
             ExportFormat::ThreeMf => "3MF",
+            ExportFormat::Schem => "Sponge schematic",
         };
         let mut dlg = rfd::FileDialog::new().add_filter(label, &[ext]);
         let stem = |p: &PathBuf| p.file_stem().map(|s| s.to_string_lossy().to_string());
@@ -503,10 +531,19 @@ impl App {
         std::thread::spawn(move || {
             let r = (|| -> anyhow::Result<String> {
                 let s = export::run_export(&reg, &dir, sel, &opts, &out, &world_name, &p2)?;
-                Ok(tf(
-                    "Exported: {0} — {1} faces, {2} vertices, {3} materials, {4} MB",
-                    &[&out.display(), &s.quads, &s.vertices, &s.materials, &format!("{:.1}", s.obj_bytes as f64 / 1e6)],
-                ))
+                let mut msg = if opts.format == ExportFormat::Schem {
+                    tf("Saved: {0} — {1} blocks, {2} entities, {3} block types", &[&out.display(), &s.quads, &s.vertices, &s.materials])
+                } else {
+                    tf(
+                        "Exported: {0} — {1} faces, {2} vertices, {3} materials, {4} MB",
+                        &[&out.display(), &s.quads, &s.vertices, &s.materials, &format!("{:.1}", s.obj_bytes as f64 / 1e6)],
+                    )
+                };
+                if !s.unknown.is_empty() {
+                    msg.push_str("\n\n");
+                    msg.push_str(&tf("Not drawn by this version of MC Exporter ({0}): {1}", &[&s.unknown.len(), &s.unknown.join(", ")]));
+                }
+                Ok(msg)
             })();
             let _ = tx.send(r.map_err(|e| format!("{e:#}")));
         });
@@ -650,15 +687,34 @@ impl App {
                 ExportFormat::Glb => t("glTF .glb (single file, Blender, game engines)"),
                 ExportFormat::Stl => t("STL (3D printing)"),
                 ExportFormat::ThreeMf => t("3MF (3D printing, with colors)"),
+                ExportFormat::Schem => t("Schematic .schem (WorldEdit, Litematica)"),
             };
             egui::ComboBox::from_id_salt("format").selected_text(fname(o.format)).width(ui.available_width() - 8.0).show_ui(ui, |ui| {
-                for f in [ExportFormat::Obj, ExportFormat::Glb, ExportFormat::Stl, ExportFormat::ThreeMf] {
+                for f in [ExportFormat::Obj, ExportFormat::Glb, ExportFormat::Stl, ExportFormat::ThreeMf, ExportFormat::Schem] {
                     ui.selectable_value(&mut o.format, f, fname(f));
                 }
             });
             ui.add_space(4.0);
             if o.format.is_print() {
                 self.print_panel(ui);
+                return;
+            }
+            if o.format == ExportFormat::Schem {
+                ui.label(egui::RichText::new(t("Saves the blocks, block entities and entities of the selection, to paste them with WorldEdit or share the build.")).weak());
+                ui.separator();
+                let n_ex = o.excluded.len();
+                if ui
+                    .button(if n_ex == 0 { t("Choose blocks to export…") } else { tf("Choose blocks to export… ({0} excluded)", &[&n_ex]) })
+                    .clicked()
+                {
+                    self.show_blocks = true;
+                }
+                let o = &mut self.opts;
+                ui.checkbox(&mut o.render_entities, t("Entities (mobs, displays, item frames, paintings…)"));
+            entity_filter(ui, o);
+            let o = &mut self.opts;
+                entity_filter(ui, o);
+                self.export_button(ui);
                 return;
             }
             let o = &mut self.opts;
@@ -718,6 +774,8 @@ impl App {
             ui.checkbox(&mut o.obj_per_chunk, t("One object per chunk"));
             ui.checkbox(&mut o.optimize, t("Optimize mesh (merge faces)"));
             ui.checkbox(&mut o.double_sided, t("Double-sided faces (plants, thin panes)"));
+            ui.checkbox(&mut o.ambient_occlusion, t("Ambient occlusion (shaded corners)"))
+                .on_hover_text(t("Darkens the corners between blocks like the game's smooth lighting, stored as vertex colors."));
             ui.checkbox(&mut o.randomize, t("Random model variants"));
             if o.format == ExportFormat::Obj {
                 ui.checkbox(&mut o.use_groups, t("OBJ groups “g” (Maya compatible)"));
@@ -737,6 +795,10 @@ impl App {
                 if o.format == ExportFormat::Obj {
                     ui.checkbox(&mut o.alpha_separate, t("Alpha channel in separate files"));
                 }
+                ui.checkbox(&mut o.pbr, t("PBR maps from resource packs"))
+                    .on_hover_text(t("Normal, roughness, metal and emission maps of LabPBR resource packs (_n and _s textures)."));
+                ui.checkbox(&mut o.atlas, t("Texture atlas (3 materials only)"))
+                    .on_hover_text(t("Packs every texture into one image per kind (solid, cut-out, translucent). Lighter for game engines; faces are not merged."));
             });
             self.export_button(ui);
         });
@@ -893,7 +955,7 @@ impl App {
     }
 
     fn central(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("view-tabs").show_inside(ui, |ui| {
+        egui::Panel::top("view-tabs").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.view_3d, false, t("2D map"));
                 ui.add_enabled_ui(self.pv_ok, |ui| {
@@ -912,7 +974,7 @@ impl App {
                         ui.label(&self.pv_status);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(t("Left drag: rotate · right drag: move · wheel: zoom · double-click: reset")).weak());
+                        ui.label(egui::RichText::new(t("Drag the yellow handles to resize the selection · left drag: rotate · right drag: move · wheel: zoom")).weak());
                     });
                 }
             });
@@ -927,7 +989,21 @@ impl App {
             if self.sel.is_none() {
                 ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, t("Select an area: right-click + drag on the map."), egui::FontId::proportional(16.0), Color32::from_gray(40));
             }
-            crate::preview::show(ui, rect, &mut self.pv_cam, &self.pv_mesh, self.pv_gen);
+            match self.sel {
+                Some(s) => {
+                    let mut min = [s[0].min(s[2]), self.floor.min(self.ceil), s[1].min(s[3])];
+                    let mut max = [s[0].max(s[2]), self.floor.max(self.ceil), s[1].max(s[3])];
+                    let before = (min, max);
+                    let edit = crate::preview::BoxEdit { min: &mut min, max: &mut max, drag: &mut self.pv_drag };
+                    crate::preview::show(ui, rect, &mut self.pv_cam, &self.pv_mesh, self.pv_gen, Some(edit));
+                    if (min, max) != before {
+                        self.sel = Some([min[0], min[2], max[0], max[2]]);
+                        self.floor = min[1];
+                        self.ceil = max[1];
+                    }
+                }
+                None => crate::preview::show(ui, rect, &mut self.pv_cam, &self.pv_mesh, self.pv_gen, None),
+            }
         } else {
             self.map_view(ui);
         }
@@ -1177,6 +1253,21 @@ impl App {
                     }
                 });
                 ui.separator();
+                ui.label(egui::RichText::new(t("Mods")).strong());
+                ui.checkbox(&mut self.use_mods, t("Read blocks from the mods of the world's game folder"))
+                    .on_hover_text(t("Textures and block models are read from the .jar files of the mods folder next to the saves folder (Fabric, Forge, NeoForge, Quilt)."));
+                if self.use_mods {
+                    if self.mods.is_empty() {
+                        ui.label(egui::RichText::new(t("No mod found for this world.")).weak());
+                    } else {
+                        ui.collapsing(tf("{0} mods loaded", &[&self.mods.len()]), |ui| {
+                            for m in &self.mods {
+                                ui.label(m.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
+                            }
+                        });
+                    }
+                }
+                ui.separator();
                 if ui.button(t("Apply and reload")).clicked() {
                     reload = true;
                 }
@@ -1259,3 +1350,33 @@ impl eframe::App for App {
 
 #[allow(dead_code)]
 fn _unused(_: Vec2) {}
+
+/// Entity categories kept in the export
+fn entity_filter(ui: &mut egui::Ui, o: &mut ExportOptions) {
+    use crate::entity::EntityKind;
+    if !o.render_entities {
+        return;
+    }
+    ui.indent("entity-kinds", |ui| {
+        for k in crate::entity::ENTITY_KINDS {
+            let label = match k {
+                EntityKind::Mob => t("Mobs"),
+                EntityKind::ArmorStand => t("Armor stands"),
+                EntityKind::Frame => t("Item frames and paintings"),
+                EntityKind::Display => t("Display entities"),
+                EntityKind::Vehicle => t("Boats and minecarts"),
+                EntityKind::Item => t("Dropped items and XP orbs"),
+                EntityKind::Projectile => t("Projectiles"),
+                EntityKind::Other => t("Other (leash knots, crystals, falling blocks…)"),
+            };
+            let mut on = !o.excluded_entities.contains(&k);
+            if ui.checkbox(&mut on, label).changed() {
+                if on {
+                    o.excluded_entities.retain(|x| *x != k);
+                } else {
+                    o.excluded_entities.push(k);
+                }
+            }
+        }
+    });
+}

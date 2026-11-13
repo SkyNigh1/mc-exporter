@@ -63,6 +63,14 @@ pub struct ExportOptions {
     pub print_hollow: u32,
     /// 3D printing: remove floating pieces smaller than this many blocks (0 = keep all)
     pub print_min_piece: u32,
+    /// darken the corners between blocks like the game's smooth lighting (vertex colors)
+    pub ambient_occlusion: bool,
+    /// normal / roughness / metal / emission maps from PBR resource packs (LabPBR)
+    pub pbr: bool,
+    /// pack all textures into a few atlas images
+    pub atlas: bool,
+    /// entity categories left out of the export
+    pub excluded_entities: Vec<crate::entity::EntityKind>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -71,6 +79,7 @@ pub enum ExportFormat {
     Glb,
     Stl,
     ThreeMf,
+    Schem,
 }
 
 impl ExportFormat {
@@ -80,6 +89,7 @@ impl ExportFormat {
             ExportFormat::Glb => "glb",
             ExportFormat::Stl => "stl",
             ExportFormat::ThreeMf => "3mf",
+            ExportFormat::Schem => "schem",
         }
     }
     pub fn from_ext(e: &str) -> Option<ExportFormat> {
@@ -88,11 +98,15 @@ impl ExportFormat {
             "glb" => Some(ExportFormat::Glb),
             "stl" => Some(ExportFormat::Stl),
             "3mf" => Some(ExportFormat::ThreeMf),
+            "schem" => Some(ExportFormat::Schem),
             _ => None,
         }
     }
     pub fn is_print(self) -> bool {
         matches!(self, ExportFormat::Stl | ExportFormat::ThreeMf)
+    }
+    pub fn is_mesh(self) -> bool {
+        matches!(self, ExportFormat::Obj | ExportFormat::Glb)
     }
 }
 
@@ -130,6 +144,10 @@ impl Default for ExportOptions {
             print_detail: 2,
             print_hollow: 0,
             print_min_piece: 8,
+            ambient_occlusion: false,
+            pbr: true,
+            atlas: false,
+            excluded_entities: Vec::new(),
         }
     }
 }
@@ -172,12 +190,16 @@ pub struct OutQuad {
     pub uv: [[f32; 2]; 4],
     pub mat: MatKey,
     pub group: (i32, i32),
+    /// per-vertex brightness (ambient occlusion), 255 = fully lit
+    pub light: [u8; 4],
 }
 
 pub struct Mesh {
     pub quads: Vec<OutQuad>,
     pub sel: Selection,
     pub chunks_loaded: usize,
+    /// blocks and entities this version cannot draw
+    pub unknown: Vec<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -337,15 +359,52 @@ fn mergeable(pos: &[[f32; 3]; 4], uv: &[[f32; 2]; 4], d: Dir) -> bool {
 struct Partial {
     quads: Vec<OutQuad>,
     cells: HashMap<PlaneKey, Vec<(i32, i32)>>,
+    unknown: HashSet<u32>,
+}
+
+/// Brightness of the 4 corners of a face lying on the block boundary, from the
+/// opaque cubes around it (same rule as the game's smooth lighting).
+fn ambient_occlusion(ctx: &Ctx, x: i32, y: i32, z: i32, pos: &[[f32; 3]; 4], dir: Option<Dir>) -> [u8; 4] {
+    const LEVELS: [u8; 4] = [128, 166, 209, 255];
+    let Some(d) = dir else { return [255; 4] };
+    let v = d.vec();
+    let axis = if v[0] != 0 { 0 } else if v[1] != 0 { 1 } else { 2 };
+    let plane = if v[axis] > 0 { 1.0 } else { 0.0 };
+    if pos.iter().any(|p| (p[axis] - plane).abs() > 1e-4) {
+        return [255; 4];
+    }
+    let solid = |dx: i32, dy: i32, dz: i32| -> u8 {
+        let g = &ctx.geoms[ctx.neighbor(x + v[0] + dx, y + v[1] + dy, z + v[2] + dz) as usize];
+        // like the game: any full block casts shade, leaves and glass included
+        ((g.full || g.occludes.iter().all(|o| *o)) && !g.unknown) as u8
+    };
+    let (t1, t2) = match axis {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    };
+    let mut out = [255u8; 4];
+    for (k, p) in pos.iter().enumerate() {
+        let mut a = [0i32; 3];
+        let mut b = [0i32; 3];
+        a[t1] = if p[t1] >= 0.5 { 1 } else { -1 };
+        b[t2] = if p[t2] >= 0.5 { 1 } else { -1 };
+        let s1 = solid(a[0], a[1], a[2]);
+        let s2 = solid(b[0], b[1], b[2]);
+        let c = solid(a[0] + b[0], a[1] + b[1], a[2] + b[2]);
+        let level = if s1 == 1 && s2 == 1 { 0 } else { 3 - (s1 + s2 + c) as usize };
+        out[k] = LEVELS[level];
+    }
+    out
 }
 
 impl Partial {
     #[allow(clippy::too_many_arguments)]
-    fn emit(&mut self, ctx: &Ctx, bx: i32, by: i32, bz: i32, pos: [[f32; 3]; 4], uv: [[f32; 2]; 4], dir: Option<Dir>, mat: MatKey, group: (i32, i32), double: bool) {
+    fn emit(&mut self, ctx: &Ctx, bx: i32, by: i32, bz: i32, pos: [[f32; 3]; 4], uv: [[f32; 2]; 4], dir: Option<Dir>, mat: MatKey, group: (i32, i32), double: bool, light: [u8; 4]) {
         let lx = (bx - ctx.sel.x0) as f32;
         let lz = (bz - ctx.sel.z0) as f32;
         let ly = by as f32;
-        if ctx.opts.optimize && !double {
+        if ctx.opts.optimize && !double && light == [255; 4] && !ctx.opts.atlas {
             if let Some(d) = dir {
                 if mergeable(&pos, &uv, d) {
                     let (plane, a, b) = match d {
@@ -360,9 +419,9 @@ impl Partial {
         }
         let p = pos.map(|p| [p[0] + lx, p[1] + ly, p[2] + lz]);
         if double {
-            self.quads.push(OutQuad { pos: [p[3], p[2], p[1], p[0]], uv: [uv[3], uv[2], uv[1], uv[0]], mat, group });
+            self.quads.push(OutQuad { pos: [p[3], p[2], p[1], p[0]], uv: [uv[3], uv[2], uv[1], uv[0]], mat, group, light: [light[3], light[2], light[1], light[0]] });
         } else {
-            self.quads.push(OutQuad { pos: p, uv, mat, group });
+            self.quads.push(OutQuad { pos: p, uv, mat, group, light });
         }
     }
 }
@@ -398,8 +457,11 @@ fn mesh_column(ctx: &Ctx, cx: i32, cz: i32) -> Partial {
                     continue;
                 }
                 let g = &ctx.geoms[id as usize];
-                if g.unknown && !ctx.opts.render_unknown {
-                    continue;
+                if g.unknown {
+                    out.unknown.insert(id);
+                    if !ctx.opts.render_unknown {
+                        continue;
+                    }
                 }
                 if let Some(r) = ctx.reach {
                     if !r.near(x, y, z) {
@@ -449,9 +511,10 @@ fn mesh_column(ctx: &Ctx, cx: i32, cz: i32) -> Partial {
                         }
                         let tint = q.tint.color(&biome);
                         let mat = MatKey { tex: q.tex, tint: if q.tint == Tint::None { None } else { tint } };
-                        out.emit(ctx, x, y, z, q.pos, q.uv, q.dir, mat, group, false);
+                        let light = if ctx.opts.ambient_occlusion { ambient_occlusion(ctx, x, y, z, &q.pos, q.dir) } else { [255; 4] };
+                        out.emit(ctx, x, y, z, q.pos, q.uv, q.dir, mat, group, false, light);
                         if ctx.opts.double_sided && q.flat {
-                            out.emit(ctx, x, y, z, q.pos, q.uv, q.dir, mat, group, true);
+                            out.emit(ctx, x, y, z, q.pos, q.uv, q.dir, mat, group, true, light);
                         }
                     }
                 }
@@ -463,7 +526,7 @@ fn mesh_column(ctx: &Ctx, cx: i32, cz: i32) -> Partial {
                     for q in crate::bent::quads(ctx.reg, ctx.reg.font(), &key, nbt, g.has_model, &bo) {
                         let tint = q.tint.color(&biome);
                         let mat = MatKey { tex: q.tex, tint: if q.tint == Tint::None { None } else { tint } };
-                        out.emit(ctx, x, y, z, q.pos, q.uv, None, mat, group, false);
+                        out.emit(ctx, x, y, z, q.pos, q.uv, None, mat, group, false, [255; 4]);
                     }
                 }
                 // fluids
@@ -507,7 +570,8 @@ fn mesh_column(ctx: &Ctx, cx: i32, cz: i32) -> Partial {
                         };
                         let pos = [c[3], c[2], c[1], c[0]];
                         let uv = pos.map(|p| canonical_uv(d, p));
-                        out.emit(ctx, x, y, z, pos, uv, Some(d), mat, group, false);
+                        let light = if ctx.opts.ambient_occlusion { ambient_occlusion(ctx, x, y, z, &pos, Some(d)) } else { [255; 4] };
+                        out.emit(ctx, x, y, z, pos, uv, Some(d), mat, group, false, light);
                     }
                 }
             }
@@ -563,7 +627,7 @@ fn greedy(key: &PlaneKey, cells: &[(i32, i32)], out: &mut Vec<OutQuad>) {
             p = [p[0], p[3], p[2], p[1]];
         }
         let uv = p.map(|q| canonical_uv(d, q));
-        out.push(OutQuad { pos: p, uv, mat: key.mat, group: key.group });
+        out.push(OutQuad { pos: p, uv, mat: key.mat, group: key.group, light: [255; 4] });
     }
 }
 
@@ -680,13 +744,18 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
     }
     let mut quads = Vec::new();
     let mut cells: HashMap<PlaneKey, Vec<(i32, i32)>> = HashMap::new();
+    let mut unknown: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for p in parts {
+        for id in &p.unknown {
+            unknown.insert(reg.state(*id).name);
+        }
         quads.extend(p.quads);
         for (k, v) in p.cells {
             cells.entry(k).or_default().extend(v);
         }
     }
     // entities
+    let unknown_ents: std::sync::Mutex<std::collections::BTreeSet<String>> = Default::default();
     if opts.render_entities {
         prog.set_stage(&crate::i18n::t("Entities"), 1);
         let ents = source.entities(cx0, cz0, cx1, cz1);
@@ -702,17 +771,25 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
                             && reach.as_ref().map(|r| r.near(p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32)).unwrap_or(true)
                     })
                     .unwrap_or(false)
+                    && !opts.excluded_entities.contains(&crate::entity::kind(e))
             })
             .flat_map_iter(|e| {
                 let p = crate::entity::entity_pos(e).unwrap();
                 let group = if opts.obj_per_chunk { ((p[0].floor() as i32) >> 4, (p[2].floor() as i32) >> 4) } else { (0, 0) };
-                crate::entity::entity_quads(reg, reg.font(), e, &eo).into_iter().map(move |q| {
+                let (eq, known) = crate::entity::entity_quads_checked(reg, reg.font(), e, &eo);
+                if !known {
+                    if let Some(id) = crate::entity::entity_id(e) {
+                        unknown_ents.lock().unwrap().insert(id);
+                    }
+                }
+                eq.into_iter().map(move |q| {
                     let tint = q.tint.color(&plains);
                     OutQuad {
                         pos: q.pos.map(|v| [v[0] - sel.x0 as f32, v[1], v[2] - sel.z0 as f32]),
                         uv: q.uv,
                         mat: MatKey { tex: q.tex, tint: if q.tint == Tint::None { None } else { tint } },
                         group,
+                        light: [255; 4],
                     }
                 })
             })
@@ -736,5 +813,6 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
     for m in merged {
         quads.extend(m);
     }
-    Ok(Mesh { quads, sel, chunks_loaded: chunks.len() })
+    unknown.extend(unknown_ents.into_inner().unwrap());
+    Ok(Mesh { quads, sel, chunks_loaded: chunks.len(), unknown: unknown.into_iter().collect() })
 }

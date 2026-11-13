@@ -33,14 +33,58 @@ const PREFIXES: &[&str] = &[
 
 enum Layer {
     Mem(HashMap<String, Vec<u8>>),
+    /// mod jar: only the list of files is kept in memory, files are read on demand
+    Zip(Mutex<zip::ZipArchive<std::io::BufReader<fs::File>>>, std::collections::HashSet<String>),
 }
 
 impl Layer {
     fn get(&self, path: &str) -> Option<Vec<u8>> {
         match self {
             Layer::Mem(m) => m.get(path).cloned(),
+            Layer::Zip(z, names) => {
+                if !names.contains(path) {
+                    return None;
+                }
+                let mut z = z.lock().ok()?;
+                let mut e = z.by_name(path).ok()?;
+                let mut buf = Vec::with_capacity(e.size() as usize);
+                e.read_to_end(&mut buf).ok()?;
+                Some(buf)
+            }
         }
     }
+}
+
+/// Opens a mod jar lazily (resources only)
+fn open_mod(path: &Path) -> Result<Layer> {
+    let f = fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let z = zip::ZipArchive::new(std::io::BufReader::new(f))?;
+    let names = z
+        .file_names()
+        .filter_map(|n| n.ok().map(|n| n.to_string()))
+        .filter(|n| pack_file_wanted(n) && (n.starts_with("assets/") || n.starts_with("data/")) && !n.ends_with('/'))
+        .collect();
+    Ok(Layer::Zip(Mutex::new(z), names))
+}
+
+/// Mod jars of the game folder that holds a world (…/saves/<world> → …/mods)
+pub fn find_mods(world_or_game_dir: &Path) -> Vec<PathBuf> {
+    let candidates = [
+        world_or_game_dir.join("mods"),
+        world_or_game_dir.parent().and_then(|p| p.parent()).map(|p| p.join("mods")).unwrap_or_default(),
+    ];
+    for dir in candidates {
+        if let Ok(rd) = fs::read_dir(&dir) {
+            let mut v: Vec<PathBuf> = rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().map(|e| e.eq_ignore_ascii_case("jar")).unwrap_or(false))
+                .collect();
+            v.sort();
+            return v;
+        }
+    }
+    Vec::new()
 }
 
 fn load_zip(path: &Path, any_namespace: bool) -> Result<HashMap<String, Vec<u8>>> {
@@ -255,8 +299,13 @@ impl Assets {
     pub fn load(jar: &Path, packs: &[PathBuf]) -> Result<Assets> {
         let mut layers = Vec::new();
         let fmt = jar_pack_format(jar);
+        // resource packs first, then mod jars (both in priority order)
         for p in packs {
-            if let Ok(m) = load_pack(p, fmt) {
+            if p.extension().map(|e| e.eq_ignore_ascii_case("jar")).unwrap_or(false) {
+                if let Ok(l) = open_mod(p) {
+                    layers.push(l);
+                }
+            } else if let Ok(m) = load_pack(p, fmt) {
                 layers.push(Layer::Mem(m));
             }
         }
@@ -487,4 +536,17 @@ pub fn pick_jar(jars: &[JarInfo], world_version: Option<&str>) -> Option<JarInfo
         }
     }
     jars.first().cloned()
+}
+
+impl Assets {
+    /// World data version of the game jar (version.json "world_version")
+    pub fn jar_data_version(&self) -> Option<i32> {
+        let f = fs::File::open(&self.jar_path).ok()?;
+        let mut z = zip::ZipArchive::new(std::io::BufReader::new(f)).ok()?;
+        let mut e = z.by_name("version.json").ok()?;
+        let mut s = String::new();
+        e.read_to_string(&mut s).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+        v.get("world_version")?.as_i64().map(|n| n as i32)
+    }
 }

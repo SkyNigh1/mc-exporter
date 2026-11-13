@@ -4,13 +4,15 @@ Exporter for **Minecraft Java** worlds and schematics to 3D models:
 
 - **OBJ + MTL + PNG textures**, for Blender, Cinema 4D, Maya, 3ds Max, Unreal, Unity, and more;
 - **glTF (.glb)**, a single file with embedded textures and proper transparency;
-- **STL** and **3MF** for **3D printing**: closed, manifold models at real size in millimetres.
+- **STL** and **3MF** for **3D printing**: closed, manifold models at real size in millimetres;
+- **Sponge schematic (.schem)**, to take a build out of a world and paste it with WorldEdit.
 
 It is a native Windows desktop application: a single, self-contained `.exe`, with no Java, no browser and no installation. The idea is the same as jMc2Obj or Mineways, with two additions:
 
 - support for **every Java version**, from Beta worlds to the latest versions (26.x and the new `dimensions/` folder);
 - very broad **entity** support;
-- a built-in **3D preview** of the selection.
+- a built-in **3D preview** of the selection, where the selection box can be resized;
+- **mod blocks** read from the mods of the world (Fabric, Forge, NeoForge, Quilt) and **PBR resource packs**.
 
 The interface is available in **English** (default), **French**, **Spanish**, **German**, **Portuguese** and **Italian**, selectable from the top bar.
 
@@ -32,6 +34,7 @@ The latest version is available on the [Releases](https://github.com/SkyNigh1/mc
   - [Projectiles and small entities](#projectiles-and-small-entities)
 - [Supported sources](#supported-sources)
 - [Resource packs](#resource-packs)
+- [Mods](#mods)
 - [Export options](#export-options)
 - [3D printing](#3d-printing)
 - [Output files](#output-files)
@@ -47,7 +50,7 @@ The latest version is available on the [Releases](https://github.com/SkyNigh1/mc
 1. Pick a world from `.minecraft/saves` (or any folder), or **drag a schematic** onto the window.
 2. The top-down map is drawn. Left-drag to pan, use the mouse wheel to zoom, **right-drag (or Shift + drag) to select** the area.
 3. Set the floor and ceiling, then the export options.
-4. Optionally check the result in the **3D preview** tab (left drag to rotate, right drag to move, wheel to zoom). It is rebuilt automatically when the selection or the options change.
+4. Optionally check the result in the **3D preview** tab (left drag to rotate, right drag to move, wheel to zoom). It is rebuilt automatically when the selection or the options change, and the **yellow handles** on the selection box resize it directly in 3D.
 5. Choose the format and **Export…**
 
 ### Game textures and models
@@ -177,6 +180,19 @@ Resource packs are set in **Settings**. Their textures, block models and blockst
 - Packs found in `.minecraft/resourcepacks` can be added in one click; any `.zip` or folder can be added too.
 - Pack **overlays** (folders that a pack applies only to some game versions) are applied according to the version of the jar in use, and zips that wrap the pack in an extra folder are handled.
 - Higher-resolution packs (32×, 64×, 128×…) are exported at their own resolution.
+- **PBR packs** in the LabPBR format (`_n` and `_s` textures, used by shader packs) are converted to standard maps: normal map (OpenGL convention), roughness, metallic and emission. They are written in the MTL file (`map_Bump`, `map_Pr`, `map_Pm`, `map_Ke`) and in glTF materials, so Blender sets them up on import.
+
+---
+
+## Mods
+
+Worlds played with mods can be exported with their mod blocks. The application finds the `mods` folder of the game folder that holds the world (`…/saves/<world>` → `…/mods`), which works for the official launcher and for instance-based launchers (Prism, MultiMC, CurseForge, Modrinth…).
+
+- Block textures, block models and blockstates are read from the mods' `.jar` files, only when needed, so large modpacks do not take much memory.
+- Mod leaves and vines get the foliage color, other tinted mod blocks the grass color.
+- Mods can be turned off in **Settings**, which also lists the mods that were found.
+
+Blocks drawn by code instead of model files (custom renderers, Forge OBJ models) and mod entities cannot be exported. After each export, the application lists the blocks and entities it could not draw, so you know what is missing.
 
 ---
 
@@ -194,16 +210,19 @@ Resource packs are set in **Settings**. Their textures, block models and blockst
 | Ores to stone | replace ores with the surrounding stone |
 | Specially rendered blocks | chests, banners, heads, signs… |
 | Sign text | sign text exported as a texture |
-| Entities | mobs, displays, item frames, paintings… |
+| Entities | mobs, displays, item frames, paintings…, with a filter by kind: mobs, armor stands, frames and paintings, display entities, boats and minecarts, dropped items, projectiles, others |
 | Player head skins | read from the game cache, then downloaded from Mojang when needed |
 | Ghasts on the ground | lift ghasts so that their tentacles touch the ground |
 | Clouds | the cloud layer above the selection, as 12×4×12 boxes like the game draws them (height adjustable: 192 since 1.18, 128 before); can be turned off |
 | One object per material / per chunk | how objects are split in the file |
 | Optimize mesh | merges identical adjacent faces (much lighter files) |
 | Double-sided faces | duplicates the faces of plants and thin panes |
+| Ambient occlusion | darkens the corners between blocks like the game's smooth lighting, stored as vertex colors (OBJ and glTF) |
 | Random variants | picks model variants like the game does (grass, stone…) |
 | OBJ groups | `g` instead of `o` (Maya compatible, OBJ only) |
 | Textures | PNG export, ×1 to ×16 upscaling, alpha in separate files (OBJ only) |
+| PBR maps | normal, roughness, metallic and emission maps from LabPBR resource packs |
+| Texture atlas | packs every texture into three images (solid, cut-out, translucent), so the model has only three materials: much lighter for game engines and Sketchfab |
 
 Options, the interface language and the last selection are remembered between sessions.
 
@@ -235,6 +254,8 @@ my_export.glb        everything in one file (geometry, materials, PNG textures)
 
 my_export.stl        3D printing: binary STL, millimetres
 my_export.3mf        3D printing: millimetres, with colors
+
+my_export.schem      Sponge v3 schematic: blocks, biomes, block entities, entities
 ```
 
 Each material is named after its texture (`oak_planks`, `grass_block_top`…). Biome tints, banners, sign text, maps and trimmed armor are generated as separate textures. In the glTF file, cut-out textures (leaves, plants, glass panes) use alpha masking and translucent ones (water, stained glass, clouds) use blending; textures are sampled with nearest filtering to keep the pixel-art look.
@@ -280,6 +301,12 @@ Extra options, anywhere on the line:
 | `--block-mm <mm>` | 3D printing: size of one block (default 1) |
 | `--detail <1, 2 or 4>` | 3D printing: cells per block edge (default 2) |
 | `--hollow <blocks>` | 3D printing: hollow with this wall thickness |
+| `--ao` | ambient occlusion |
+| `--atlas` | texture atlas |
+| `--mods <folder>` | read mod blocks from `<folder>/mods` (by default: the mods next to the world) |
+| `--no-mods` | ignore mods |
+
+The output format follows the extension, including `.schem`.
 
 The file `exemples/demo-entites.schem` contains one instance of every supported block entity and entity, and serves as a visual test.
 
@@ -291,7 +318,7 @@ The file `exemples/demo-entites.schem` contains one instance of every supported 
 - Clouds are static: they are placed as they appear at the start of a day, without their drift.
 - Entities are frozen in a rest pose: there is no animation.
 - Maps in item frames are not available for schematics, which do not contain map data.
-- Mod blocks are not rendered (only a checkerboard cube).
+- Mod blocks drawn by code (custom renderers, Forge OBJ models) and mod entities are not exported; they are listed after the export.
 - OptiFine-specific pack features (connected textures, emissive textures, random entities) are not used.
 - 3D printing keeps one color per block, not the texture details.
 

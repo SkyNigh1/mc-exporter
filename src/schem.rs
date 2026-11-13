@@ -25,6 +25,8 @@ pub struct Schematic {
 pub struct Extra {
     bes: Vec<((i32, i32, i32), Value)>,
     ents: Vec<Value>,
+    /// biome per block (schematic coordinates); y = i32::MIN for a whole column
+    biomes: HashMap<(i32, i32, i32), u16>,
 }
 
 fn compound_of(v: &Value) -> HashMap<String, Value> {
@@ -249,7 +251,17 @@ pub fn load(path: &Path, reg: &Registry) -> Result<Schematic> {
         }
     }
     let n_ent = entities.len();
-    let chunks = build_chunks(blocks.into_iter().map(|(x, y, z, id)| (x - min[0], y - min[1], z - min[2], id)), bes);
+    let has_biomes = !ex.biomes.is_empty();
+    let biomes = std::mem::take(&mut ex.biomes);
+    let biome_at = move |x: i32, y: i32, z: i32| -> u16 {
+        let (sx, sy, sz) = (x + min[0], y + min[1], z + min[2]);
+        biomes.get(&(sx, sy, sz)).or_else(|| biomes.get(&(sx, i32::MIN, sz))).copied().unwrap_or(0)
+    };
+    let chunks = build_chunks(
+        blocks.into_iter().map(|(x, y, z, id)| (x - min[0], y - min[1], z - min[2], id)),
+        bes,
+        if has_biomes { Some(&biome_at) } else { None },
+    );
     Ok(Schematic { name, format, size, blocks: count, world: MemWorld { chunks, entities }, block_entities: n_be, entities: n_ent })
 }
 
@@ -289,6 +301,24 @@ fn sponge(s: &Value, reg: &Registry, ex: &mut Extra) -> Result<(String, Vec<(i32
         let z = (i / w) % l;
         let y = i / (w * l);
         out.push((x, y, z, gid));
+    }
+    // biomes: v3 { Palette, Data } per block, v2 BiomePalette / BiomeData per column
+    let (bpal, bdata, per_block) = match get(s, "Biomes") {
+        Some(b @ Value::Compound(_)) => (get(b, "Palette"), bytes(get(b, "Data")), true),
+        _ => (get(s, "BiomePalette"), bytes(get(s, "BiomeData")), false),
+    };
+    if let (Some(Value::Compound(bp)), Some(bd)) = (bpal, bdata) {
+        let names: HashMap<u32, u16> = bp.iter().filter_map(|(k, v)| int(Some(v)).map(|i| (i as u32, reg.biome_id(k)))).collect();
+        let count = if per_block { (w * h * l) as usize } else { (w * l) as usize };
+        for (i, v) in read_varints(&bd, count).iter().enumerate() {
+            let Some(&b) = names.get(v) else { continue };
+            let i = i as i32;
+            if per_block {
+                ex.biomes.insert((i % w, i / (w * l), (i / w) % l), b);
+            } else {
+                ex.biomes.insert((i % w, i32::MIN, i / w), b);
+            }
+        }
     }
     let be_list = match get(s, "Blocks") {
         Some(b @ Value::Compound(_)) => get(b, "BlockEntities"),

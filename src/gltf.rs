@@ -2,7 +2,7 @@
 //! Materials use alpha masking for cut-out textures (leaves, plants, glass panes) and
 //! blending for translucent ones (water, stained glass, clouds).
 
-use crate::export::{ExportSummary, material_image, material_names, placement};
+use crate::export::{ExportSummary, material_image, material_names, pbr_maps, placement};
 use crate::mesh::{ExportOptions, MatKey, Mesh, Progress};
 use crate::registry::Registry;
 use anyhow::{Context, Result};
@@ -78,12 +78,31 @@ pub fn write_glb(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, path: &Path,
             mat["doubleSided"] = json!(true);
         }
         if opts.export_textures {
-            let img = img.upscaled(opts.prescale.max(1));
-            let png = png_bytes(&img.rgba, img.w, img.h)?;
-            let view = bin.view(&png, None);
-            images.push(json!({ "name": names[m], "bufferView": view, "mimeType": "image/png" }));
-            textures.push(json!({ "sampler": 0, "source": images.len() - 1 }));
-            mat["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": textures.len() - 1 });
+            let f = opts.prescale.max(1);
+            let maps = if opts.pbr { pbr_maps(reg, m, &img) } else { None };
+            let img = img.upscaled(f);
+            let mut add = |img: &crate::export::TexImage, suffix: &str| -> Result<usize> {
+                let png = png_bytes(&img.rgba, img.w, img.h)?;
+                let view = bin.view(&png, None);
+                images.push(json!({ "name": format!("{}{suffix}", names[m]), "bufferView": view, "mimeType": "image/png" }));
+                textures.push(json!({ "sampler": 0, "source": images.len() - 1 }));
+                Ok(textures.len() - 1)
+            };
+            let base = add(&img, "")?;
+            mat["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": base });
+            if let Some(maps) = maps {
+                if let Some(n) = maps.normal {
+                    mat["normalTexture"] = json!({ "index": add(&n.upscaled(f), "_normal")? });
+                }
+                if let Some(mr) = maps.metal_rough {
+                    mat["pbrMetallicRoughness"]["metallicRoughnessTexture"] = json!({ "index": add(&mr.upscaled(f), "_mr")? });
+                    mat["pbrMetallicRoughness"]["metallicFactor"] = json!(1.0);
+                }
+                if let Some(e) = maps.emissive {
+                    mat["emissiveTexture"] = json!({ "index": add(&e.upscaled(f), "_emit")? });
+                    mat["emissiveFactor"] = json!([1.0, 1.0, 1.0]);
+                }
+            }
         } else {
             let a = img.average();
             mat["pbrMetallicRoughness"]["baseColorFactor"] = json!([a[0], a[1], a[2], 1.0]);
@@ -110,8 +129,9 @@ pub fn write_glb(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, path: &Path,
             let mut pos: Vec<f32> = Vec::new();
             let mut nrm: Vec<f32> = Vec::new();
             let mut uv: Vec<f32> = Vec::new();
+            let mut col: Vec<f32> = Vec::new();
             let mut idx: Vec<u32> = Vec::new();
-            let mut seen: HashMap<[i32; 8], u32> = HashMap::new();
+            let mut seen: HashMap<[i32; 9], u32> = HashMap::new();
             let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
             for &qi in quads {
                 let q = &mesh.quads[qi];
@@ -129,7 +149,9 @@ pub fn write_glb(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, path: &Path,
                     let wp = [(p[k][0] + shift[0]) * scale, (p[k][1] + shift[1]) * scale, (p[k][2] + shift[2]) * scale];
                     // glTF texture coordinates start at the top of the image
                     let t = [q.uv[k][0], 1.0 - q.uv[k][1]];
+                    let light = if opts.ambient_occlusion { q.light[k] } else { 255 };
                     let key = [
+                        light as i32,
                         (wp[0] * 4096.0).round() as i32,
                         (wp[1] * 4096.0).round() as i32,
                         (wp[2] * 4096.0).round() as i32,
@@ -144,6 +166,8 @@ pub fn write_glb(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, path: &Path,
                         pos.extend_from_slice(&wp);
                         nrm.extend_from_slice(&n);
                         uv.extend_from_slice(&t);
+                        let c = light as f32 / 255.0;
+                        col.extend_from_slice(&[c, c, c]);
                         for a in 0..3 {
                             lo[a] = lo[a].min(wp[a]);
                             hi[a] = hi[a].max(wp[a]);
@@ -167,12 +191,19 @@ pub fn write_glb(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, path: &Path,
             let vt = bin.view(&f32_bytes(&uv), Some(ARRAY_BUFFER));
             accessors.push(json!({ "bufferView": vt, "componentType": FLOAT, "count": nv, "type": "VEC2" }));
             let a_uv = accessors.len() - 1;
+            let mut attributes = json!({ "POSITION": a_pos, "NORMAL": a_nrm, "TEXCOORD_0": a_uv });
+            if opts.ambient_occlusion {
+                // vertex colors multiply the base color in glTF
+                let vc = bin.view(&f32_bytes(&col), Some(ARRAY_BUFFER));
+                accessors.push(json!({ "bufferView": vc, "componentType": FLOAT, "count": nv, "type": "VEC3" }));
+                attributes["COLOR_0"] = json!(accessors.len() - 1);
+            }
             let ib: Vec<u8> = idx.iter().flat_map(|x| x.to_le_bytes()).collect();
             let vi = bin.view(&ib, Some(ELEMENT_ARRAY_BUFFER));
             accessors.push(json!({ "bufferView": vi, "componentType": UINT, "count": idx.len(), "type": "SCALAR" }));
             let a_idx = accessors.len() - 1;
             prims.push(json!({
-                "attributes": { "POSITION": a_pos, "NORMAL": a_nrm, "TEXCOORD_0": a_uv },
+                "attributes": attributes,
                 "indices": a_idx,
                 "material": mi,
             }));
@@ -232,5 +263,5 @@ pub fn write_glb(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, path: &Path,
     out.extend_from_slice(b"BIN\0");
     out.extend_from_slice(&bin.data);
     std::fs::write(path, &out).with_context(|| format!("creating {}", path.display()))?;
-    Ok(ExportSummary { quads: mesh.quads.len(), vertices: total_vertices, materials: mats.len(), obj_bytes: out.len() as u64 })
+    Ok(ExportSummary { quads: mesh.quads.len(), vertices: total_vertices, materials: mats.len(), obj_bytes: out.len() as u64, unknown: mesh.unknown.clone() })
 }
