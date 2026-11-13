@@ -627,6 +627,11 @@ impl App {
             ui.checkbox(&mut o.render_entities, t("Entities (mobs, displays, item frames, paintings…)"));
             ui.checkbox(&mut o.download_skins, t("Download player head skins"))
                 .on_hover_text(t("Skins already seen in game are read from the Minecraft cache; the others are requested from Mojang's servers."));
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut o.clouds, t("Clouds"));
+                ui.add_enabled(o.clouds, egui::DragValue::new(&mut o.cloud_height).range(-2048..=4096))
+                    .on_hover_text(t("Cloud height (192 since 1.18, 128 before)"));
+            });
             ui.checkbox(&mut o.ghast_on_ground, t("Place ghasts on their tentacles"))
                 .on_hover_text(t("In the game, ghast tentacles hang below their position. Check this to raise them to ground level."));
             ui.separator();

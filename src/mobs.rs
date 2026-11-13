@@ -98,6 +98,20 @@ pub fn equipment<'a>(ent: &'a Value, slot: &str) -> Option<&'a Value> {
     if let Some(v) = get(get(Some(ent), "equipment"), slot) {
         return Some(v);
     }
+    // before 1.9: Equipment = [hand, feet, legs, chest, head]
+    if let Some(Value::List(eq)) = get(Some(ent), "Equipment") {
+        let i = match slot {
+            "mainhand" => 0,
+            "feet" => 1,
+            "legs" => 2,
+            "chest" => 3,
+            "head" => 4,
+            _ => 99,
+        };
+        if let Some(v) = eq.get(i).filter(|v| item_id(v).is_some()) {
+            return Some(v);
+        }
+    }
     let (list, idx) = match slot {
         "feet" => ("ArmorItems", 0),
         "legs" => ("ArmorItems", 1),

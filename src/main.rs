@@ -3,10 +3,12 @@
 mod app;
 mod assets;
 mod bent;
+mod clouds;
 mod deco;
 mod entity;
 mod font;
 mod i18n;
+mod legacy;
 mod pose;
 mod export;
 mod map;
@@ -90,7 +92,7 @@ fn cli(a: &[String]) -> anyhow::Result<()> {
     let opts = mesh::ExportOptions::default();
     let prog = mesh::Progress::new();
     let m = mesh::build_mesh(&reg, &dim.source, sel, &opts, &prog)?;
-    println!("{} chunks, {} quads en {:?}", m.chunks_loaded, m.quads.len(), t0.elapsed());
+    println!("{} chunks, {} quads in {:?}", m.chunks_loaded, m.quads.len(), t0.elapsed());
     let s = export::write_obj(&reg, &m, &opts, &PathBuf::from(&a[9]), &info.name, &prog)?;
     println!(
         "OBJ: {} quads, {} vertices, {} materials, {:.1} MB in {:?}",

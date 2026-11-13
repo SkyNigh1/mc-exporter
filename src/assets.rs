@@ -25,6 +25,7 @@ const PREFIXES: &[&str] = &[
     "data/minecraft/banner_pattern/",
     "assets/minecraft/equipment/",
     "assets/minecraft/textures/trims/",
+    "assets/minecraft/textures/environment/",
     "data/minecraft/trim_material/",
     "data/minecraft/trim_pattern/",
     "assets/minecraft/textures/models/armor/",

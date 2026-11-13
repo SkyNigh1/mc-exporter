@@ -88,7 +88,7 @@ impl WorldInfo {
 
 fn has_mca(dir: &Path) -> bool {
     fs::read_dir(dir)
-        .map(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".mca")))
+        .map(|rd| rd.flatten().any(|e| { let n = e.file_name().to_string_lossy().to_string(); n.ends_with(".mca") || n.ends_with(".mcr") }))
         .unwrap_or(false)
 }
 
@@ -158,7 +158,7 @@ pub fn list_regions(dir: &Path) -> Vec<(i32, i32)> {
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().to_string();
             let parts: Vec<&str> = n.split('.').collect();
-            if parts.len() == 4 && parts[0] == "r" && parts[3] == "mca" {
+            if parts.len() == 4 && parts[0] == "r" && (parts[3] == "mca" || parts[3] == "mcr") {
                 if let (Ok(x), Ok(z)) = (parts[1].parse(), parts[2].parse()) {
                     if e.metadata().map(|m| m.len() >= 8192).unwrap_or(false) {
                         v.push((x, z));
@@ -167,6 +167,9 @@ pub fn list_regions(dir: &Path) -> Vec<(i32, i32)> {
             }
         }
     }
+    // a converted world can contain both .mca and .mcr files for the same region
+    v.sort();
+    v.dedup();
     v
 }
 
@@ -179,7 +182,8 @@ pub struct RegionFile {
 
 impl RegionFile {
     pub fn open(dir: &Path, rx: i32, rz: i32) -> Option<RegionFile> {
-        let data = fs::read(dir.join(format!("r.{rx}.{rz}.mca"))).ok()?;
+        // Anvil (.mca) first, then McRegion (.mcr, Beta 1.3 – 1.1)
+        let data = fs::read(dir.join(format!("r.{rx}.{rz}.mca"))).or_else(|_| fs::read(dir.join(format!("r.{rx}.{rz}.mcr")))).ok()?;
         if data.len() < 8192 {
             return None;
         }
@@ -297,7 +301,11 @@ fn bits_for(n: usize) -> usize {
 
 impl Chunk {
     pub fn parse(nbt: &[u8], reg: &Registry) -> Option<Chunk> {
-        let raw: RawChunk = fastnbt::from_bytes(nbt).ok()?;
+        let raw: RawChunk = match fastnbt::from_bytes(nbt) {
+            Ok(r) => r,
+            // older formats (everything under "Level")
+            Err(_) => return crate::legacy::parse(nbt, reg).map(|(c, _)| c),
+        };
         if let Some(st) = &raw.status {
             let s = st.trim_start_matches("minecraft:");
             if s != "full" {
@@ -439,7 +447,23 @@ impl Source {
                 let mut out = Vec::new();
                 for rx in cx0.div_euclid(32)..=cx1.div_euclid(32) {
                     for rz in cz0.div_euclid(32)..=cz1.div_euclid(32) {
-                        let Some(rf) = RegionFile::open(&edir, rx, rz) else { continue };
+                        let Some(rf) = RegionFile::open(&edir, rx, rz) else {
+                            // before 1.17: entities are stored inside the region chunks
+                            if let Some(rf) = RegionFile::open(dir, rx, rz) {
+                                for lz in 0..32 {
+                                    for lx in 0..32 {
+                                        let (cx, cz) = (rx * 32 + lx as i32, rz * 32 + lz as i32);
+                                        if cx < cx0 || cx > cx1 || cz < cz0 || cz > cz1 {
+                                            continue;
+                                        }
+                                        if let Some(nbt) = rf.chunk_nbt(lx, lz) {
+                                            out.extend(crate::legacy::chunk_entities(&nbt));
+                                        }
+                                    }
+                                }
+                            }
+                            continue;
+                        };
                         for lz in 0..32 {
                             for lx in 0..32 {
                                 let (cx, cz) = (rx * 32 + lx as i32, rz * 32 + lz as i32);

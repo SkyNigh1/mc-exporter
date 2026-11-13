@@ -47,6 +47,10 @@ pub struct ExportOptions {
     pub download_skins: bool,
     /// lift ghasts so that their tentacles touch the ground
     pub ghast_on_ground: bool,
+    /// export the cloud layer above the selection
+    pub clouds: bool,
+    /// height of the cloud layer (192 since 1.18, 128 before)
+    pub cloud_height: i32,
 }
 
 impl Default for ExportOptions {
@@ -75,6 +79,8 @@ impl Default for ExportOptions {
             render_entities: true,
             download_skins: true,
             ghast_on_ground: false,
+            clouds: true,
+            cloud_height: 192,
         }
     }
 }
@@ -560,6 +566,11 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
             })
             .collect();
         quads.extend(eq);
+    }
+    // clouds
+    if opts.clouds {
+        prog.set_stage(&crate::i18n::t("Clouds"), 1);
+        quads.extend(crate::clouds::cloud_quads(reg, sel, opts.cloud_height as f32, opts.obj_per_chunk));
     }
     prog.set_stage(&crate::i18n::t("Optimizing mesh"), 1);
     let merged: Vec<Vec<OutQuad>> = cells

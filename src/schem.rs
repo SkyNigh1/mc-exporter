@@ -472,6 +472,48 @@ fn stairs_name(id: u16) -> Option<&'static str> {
 type Props = Vec<(&'static str, String)>;
 
 /// Converts (id, data) into a modern state. `below` gives the (id, data) of the block below (doors, tall plants).
+/// Like `legacy_state`, using the block entity when the state depends on it
+/// (bed color, banner color, skull type and rotation).
+pub(crate) fn legacy_state_te(id: u16, d: u8, below: (u16, u8), te: Option<&Value>) -> (String, Vec<(String, String)>) {
+    let s = |n: &str| n.to_string();
+    let h4 = |d: u8| ["north", "south", "west", "east"][((d.saturating_sub(2)) & 3) as usize];
+    let te_int = |k: &str| te.and_then(|t| int(get(t, k)));
+    let (name, props): (String, Props) = match id {
+        26 => {
+            let color = COLORS[te_int("color").unwrap_or(14).clamp(0, 15) as usize];
+            let facing = ["south", "west", "north", "east"][(d & 3) as usize];
+            let part = if d & 8 != 0 { "head" } else { "foot" };
+            (format!("{color}_bed"), vec![("facing", s(facing)), ("part", s(part)), ("occupied", s("false"))])
+        }
+        63 => (s("oak_sign"), vec![("rotation", (d & 15).to_string())]),
+        176 | 177 => {
+            let color = COLORS[(15 - te_int("Base").unwrap_or(15).clamp(0, 15)) as usize];
+            if id == 176 {
+                (format!("{color}_banner"), vec![("rotation", (d & 15).to_string())])
+            } else {
+                (format!("{color}_wall_banner"), vec![("facing", s(h4(d)))])
+            }
+        }
+        144 => {
+            let kind = ["skeleton_skull", "wither_skeleton_skull", "zombie_head", "player_head", "creeper_head", "dragon_head"]
+                [te_int("SkullType").unwrap_or(0).clamp(0, 5) as usize];
+            if d & 7 == 1 {
+                (s(kind), vec![("rotation", (te_int("Rot").unwrap_or(0) & 15).to_string())])
+            } else {
+                let wall = kind.replace("_skull", "_wall_skull").replace("_head", "_wall_head");
+                (wall, vec![("facing", s(h4(d & 7)))])
+            }
+        }
+        _ => legacy_state(id, d, below),
+    };
+    (name, props.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+}
+
+/// Ids whose modern state depends on the block entity
+pub(crate) fn legacy_needs_te(id: u16) -> bool {
+    matches!(id, 26 | 144 | 176 | 177)
+}
+
 fn legacy_state(id: u16, d: u8, below: (u16, u8)) -> (String, Props) {
     let s = |n: &str| n.to_string();
     let axis = |d: u8| match (d >> 2) & 3 {
@@ -629,6 +671,13 @@ fn legacy(s: &Value, reg: &Registry, ex: &mut Extra) -> Result<(String, Vec<(i32
         }
         id
     };
+    let mut tes: HashMap<(i32, i32, i32), Value> = HashMap::new();
+    if let Some(Value::List(l)) = get(s, "TileEntities") {
+        for v in l {
+            let g = |k: &str| int(get(v, k)).unwrap_or(0) as i32;
+            tes.insert((g("x"), g("y"), g("z")), v.clone());
+        }
+    }
     let mut cache: HashMap<(u16, u8, u16, u8), u32> = HashMap::new();
     let mut out = Vec::new();
     for i in 0..n.min(blocks.len()) {
@@ -647,22 +696,20 @@ fn legacy(s: &Value, reg: &Registry, ex: &mut Extra) -> Result<(String, Vec<(i32
         } else {
             (0, 0)
         };
-        let key = (id, d, below.0, below.1);
-        let gid = *cache.entry(key).or_insert_with(|| {
-            let (name, props) = legacy_state(id, d, below);
-            let mut p: Vec<(String, String)> = props.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        let to_id = |te: Option<&Value>| {
+            let (name, mut p) = legacy_state_te(id, d, below, te);
             p.sort();
             reg.state_id(&format!("minecraft:{name}"), p)
-        });
+        };
+        let gid = if legacy_needs_te(id) {
+            to_id(tes.get(&(x, y, z)))
+        } else {
+            *cache.entry((id, d, below.0, below.1)).or_insert_with(|| to_id(None))
+        };
         if gid != 0 {
             out.push((x, y, z, gid));
         }
     }
-    if let Some(Value::List(l)) = get(s, "TileEntities") {
-        for v in l {
-            let g = |k: &str| int(get(v, k)).unwrap_or(0) as i32;
-            ex.bes.push(((g("x"), g("y"), g("z")), v.clone()));
-        }
-    }
+    ex.bes.extend(tes);
     Ok(("legacy MCEdit / WorldEdit (.schematic)".into(), out))
 }

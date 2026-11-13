@@ -4,7 +4,7 @@ Exporter for **Minecraft Java** worlds and schematics to **OBJ + MTL + PNG textu
 
 It is a native Windows desktop application: a single, self-contained `.exe`, with no Java, no browser and no installation. The idea is the same as jMc2Obj or Mineways, with two additions:
 
-- support for the **latest versions** of the game (26.x and the new `dimensions/` folder);
+- support for **every Java version**, from Beta worlds to the latest versions (26.x and the new `dimensions/` folder);
 - very broad **entity** support.
 
 The interface is available in **English** (default), **French**, **Spanish**, **German**, **Portuguese** and **Italian**, selectable from the top bar.
@@ -138,7 +138,16 @@ Dimensions are read from the game's model classes, textures from your installed 
 
 ## Supported sources
 
-- **Java worlds from 1.18 onwards**, including the new `dimensions/<namespace>/<name>/region` layout of 26.x versions (no copy or conversion needed). Dimensions are detected automatically (Overworld, Nether, End, datapack dimensions).
+- **Java worlds of every version**, with no conversion needed:
+
+  | Versions | Format |
+  |---|---|
+  | Beta 1.3 – 1.1 | McRegion (`.mcr`), numeric block ids |
+  | 1.2 – 1.12 | Anvil, numeric block ids, converted to modern blocks |
+  | 1.13 – 1.17 | Anvil, block palettes under `Level` |
+  | 1.18 → 26.x | current format, including the new `dimensions/<namespace>/<name>/region` layout |
+
+  Old biome ids, old entity names (`EntityHorse`, `PigZombie`, `MinecartChest`…), old equipment lists and 2D item frame directions are converted too. Dimensions are detected automatically (Overworld, Nether, End, datapack dimensions).
 - **Schematics**, imported into an empty world and processed exactly like a real world:
 
   | Format | Extension |
@@ -168,6 +177,7 @@ Dimensions are read from the game's model classes, textures from your installed 
 | Entities | mobs, displays, item frames, paintings… |
 | Player head skins | read from the game cache, then downloaded from Mojang when needed |
 | Ghasts on the ground | lift ghasts so that their tentacles touch the ground |
+| Clouds | the cloud layer above the selection, as 12×4×12 boxes like the game draws them (height adjustable: 192 since 1.18, 128 before); can be turned off |
 | One object per material / per chunk | how objects are split in the file |
 | Optimize mesh | merges identical adjacent faces (much lighter files) |
 | Double-sided faces | duplicates the faces of plants and thin panes |
@@ -226,7 +236,8 @@ The file `exemples/demo-entites.schem` contains one instance of every supported 
 
 ## Known limitations
 
-- Worlds older than 1.18 (old chunk format) and LZ4-compressed regions are not supported.
+- LZ4-compressed regions are not supported.
+- Clouds are static: they are placed as they appear at the start of a day, without their drift.
 - Entities are frozen in a rest pose: there is no animation.
 - Maps in item frames are not available for schematics, which do not contain map data.
 - Mod blocks are not rendered (only a checkerboard cube).

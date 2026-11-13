@@ -698,13 +698,16 @@ impl Registry {
             }
             Some(bs) => {
                 if let Some(vars) = bs.get("variants").and_then(|v| v.as_object()) {
-                    let found = vars.iter().find(|(k, _)| {
+                    let matches = |k: &str, lenient: bool| {
                         k.is_empty()
                             || k.split(',').all(|kv| match kv.split_once('=') {
-                                Some((a, b)) => key.prop(a) == Some(b),
+                                // lenient: a property missing from the state (old worlds, partial
+                                // schematic states) matches any value
+                                Some((a, b)) => key.prop(a).map(|v| v == b).unwrap_or(lenient),
                                 None => true,
                             })
-                    });
+                    };
+                    let found = vars.iter().find(|(k, _)| matches(k, false)).or_else(|| vars.iter().find(|(k, _)| matches(k, true)));
                     if let Some((_, v)) = found {
                         g.parts.push(self.variant_list(v, tint));
                     }
