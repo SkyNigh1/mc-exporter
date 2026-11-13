@@ -1,6 +1,6 @@
-//! Import de schematics dans un monde « vide » en mémoire :
-//! Sponge v1/v2/v3 (.schem), MCEdit/WorldEdit ancien (.schematic), Litematica (.litematic),
-//! structures vanilla (.nbt).
+//! Import of schematics into an "empty" in-memory world:
+//! Sponge v1/v2/v3 (.schem), legacy MCEdit/WorldEdit (.schematic), Litematica (.litematic),
+//! vanilla structures (.nbt).
 
 use crate::registry::Registry;
 use crate::world::{MemWorld, build_chunks};
@@ -48,7 +48,7 @@ fn dvals(v: Option<&Value>) -> Option<[f64; 3]> {
     }
 }
 
-/// Bloc spécial au format Sponge (v1/v2 : données à plat, v3 : dans Data)
+/// Block entity in Sponge format (v1/v2: flat data, v3: inside Data)
 fn sponge_be(v: &Value) -> Option<((i32, i32, i32), Value)> {
     let p = dvals(get(v, "Pos"))?;
     let id = match get(v, "Id").or_else(|| get(v, "id")) {
@@ -67,7 +67,7 @@ fn sponge_be(v: &Value) -> Option<((i32, i32, i32), Value)> {
     Some(((x, y, z), Value::Compound(m)))
 }
 
-/// Entité : données (à plat ou dans Data) avec Pos dans le repère du schematic
+/// Entity: data (flat or inside Data) with Pos in the schematic's frame
 fn make_entity(v: &Value, pos: [f64; 3]) -> Value {
     let mut m = match get(v, "Data") {
         Some(d @ Value::Compound(_)) => compound_of(d),
@@ -121,7 +121,7 @@ fn ints(v: Option<&Value>) -> Option<Vec<i32>> {
     }
 }
 
-/// "minecraft:oak_stairs[facing=east,half=bottom]" → (nom, propriétés)
+/// "minecraft:oak_stairs[facing=east,half=bottom]" → (name, properties)
 pub fn parse_state_string(s: &str) -> (String, Vec<(String, String)>) {
     let (name, rest) = match s.find('[') {
         Some(i) => (&s[..i], s[i + 1..].trim_end_matches(']')),
@@ -206,7 +206,7 @@ pub fn load(path: &Path, reg: &Registry) -> Result<Schematic> {
     if blocks.is_empty() {
         bail!("le schematic ne contient aucun bloc");
     }
-    // ramène le coin minimum en (0, 0, 0)
+    // move the minimum corner to (0, 0, 0)
     let min = blocks.iter().fold([i32::MAX; 3], |m, b| [m[0].min(b.0), m[1].min(b.1), m[2].min(b.2)]);
     let max = blocks.iter().fold([i32::MIN; 3], |m, b| [m[0].max(b.0), m[1].max(b.1), m[2].max(b.2)]);
     let mut size = [max[0] - min[0] + 1, max[1] - min[1] + 1, max[2] - min[2] + 1];
@@ -240,7 +240,7 @@ pub fn load(path: &Path, reg: &Registry) -> Result<Schematic> {
             }
         }
     }
-    // la sélection englobe aussi les entités (créatures volantes, displays au-dessus du build…)
+    // the selection also covers entities (flying creatures, displays above the build…)
     for e in &entities {
         if let Some(p) = dvals(get(e, "Pos")) {
             for i in 0..3 {
@@ -413,7 +413,7 @@ fn structure(root: &Value, reg: &Registry, ex: &mut Extra) -> Result<(String, Ve
     Ok(("Structure vanilla (.nbt)".into(), out))
 }
 
-// ───────────────────────── ancien format MCEdit (identifiants numériques) ─────────────────────────
+// ───────────────────────── legacy MCEdit format (numeric ids) ─────────────────────────
 
 const COLORS: [&str; 16] = [
     "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "light_gray", "cyan", "purple", "blue",
@@ -471,7 +471,7 @@ fn stairs_name(id: u16) -> Option<&'static str> {
 
 type Props = Vec<(&'static str, String)>;
 
-/// Convertit (id, data) en état moderne. `below` donne (id, data) du bloc du dessous (portes, plantes hautes).
+/// Converts (id, data) into a modern state. `below` gives the (id, data) of the block below (doors, tall plants).
 fn legacy_state(id: u16, d: u8, below: (u16, u8)) -> (String, Props) {
     let s = |n: &str| n.to_string();
     let axis = |d: u8| match (d >> 2) & 3 {

@@ -1,6 +1,6 @@
-//! Blocs dessinés par du code dans le jeu (« block entities ») : coffres, shulkers, têtes,
-//! bannières, lits et panneaux (anciennes versions), texte des panneaux, pot décoré, cloche…
-//! Les dimensions viennent des modèles du jeu (ChestModel, ShulkerModel, BannerModel…).
+//! Blocks drawn by code in the game ("block entities"): chests, shulker boxes, heads,
+//! banners, beds and signs (older versions), sign text, decorated pot, bell…
+//! Dimensions come from the game models (ChestModel, ShulkerModel, BannerModel…).
 
 use crate::font::{self, Align, Font, Span};
 use crate::pose::{self, ALL_FACES, F_NORTH, Pose, Skin, bx, cube};
@@ -14,7 +14,7 @@ pub const COLORS: [&str; 16] = [
     "brown", "green", "red", "black",
 ];
 
-/// Couleur « diffuse » des teintures (bannières, laine des moutons)
+/// "Diffuse" dye color (banners, sheep wool)
 pub fn dye_diffuse(name: &str) -> [u8; 3] {
     let n: u32 = match name {
         "white" => 0xF9FFFE,
@@ -37,7 +37,7 @@ pub fn dye_diffuse(name: &str) -> [u8; 3] {
     [(n >> 16) as u8, (n >> 8) as u8, n as u8]
 }
 
-/// Ce bloc a-t-il besoin d'un rendu spécial ?
+/// Does this block need special rendering?
 pub fn is_block_entity(short: &str) -> bool {
     short.ends_with("chest")
         || short.ends_with("shulker_box")
@@ -109,8 +109,8 @@ pub struct BeOpts {
     pub download_skins: bool,
 }
 
-/// Quads (coordonnées locales du bloc) pour un bloc à rendu spécial.
-/// `has_model` : le jar fournit déjà la géométrie (lits et panneaux en 26.x).
+/// Quads (block-local coordinates) for a specially rendered block.
+/// `has_model`: the jar already provides the geometry (beds and signs in 26.x).
 pub fn quads(reg: &Registry, font: &Font, key: &StateKey, nbt: Option<&Value>, has_model: bool, o: &BeOpts) -> Vec<Quad> {
     let n = key.name.strip_prefix("minecraft:").unwrap_or(&key.name);
     let mut out = Vec::new();
@@ -281,7 +281,7 @@ fn skull(reg: &Registry, n: &str, facing: &str, rotation: f32, nbt: Option<&Valu
         Pose::new().t(0.5, 0.0, 0.5).ry(-rotation * 22.5).s(-1.0, -1.0, 1.0)
     };
     if kind == "dragon_head" {
-        // DragonHeadModel : pièce « head » réduite à 0,75, mâchoire enfant
+        // DragonHeadModel: "head" part scaled to 0.75, jaw as a child
         let h = p.part_s([0., -7.986666, 0.], [0.; 3], 0.75);
         bx(out, &h, &sk, (176., 44.), [-6., -1., -24.], [12., 5., 16.]);
         bx(out, &h, &sk, (112., 30.), [-8., -8., -10.], [16., 16., 16.]);
@@ -306,7 +306,7 @@ fn skull(reg: &Registry, n: &str, facing: &str, rotation: f32, nbt: Option<&Valu
     }
     bx(out, &p, &sk, (0., 0.), [-4., -8., -4.], [8., 8., 8.]);
     if sk.h >= 64.0 && (kind == "player_head" || kind == "zombie_head") {
-        // couche « chapeau » des têtes humanoïdes
+        // "hat" layer of humanoid heads
         cube(out, &p, &sk, 32., 0., [-4., -8., -4.], [8., 8., 8.], 0.25, false, ALL_FACES);
     }
 }
@@ -336,7 +336,7 @@ fn legacy_pattern(code: &str) -> &'static str {
     }
 }
 
-/// Liste (motif, couleur) d'une bannière, ancien et nouveau format
+/// (pattern, color) list of a banner, old and new formats
 pub fn banner_layers(reg: &Registry, nbt: Option<&Value>) -> Vec<(String, [u8; 3])> {
     let mut v = Vec::new();
     let list = get(nbt, "patterns").or_else(|| get(nbt, "Patterns")).or_else(|| get(get(nbt, "components"), "minecraft:banner_patterns"));
@@ -361,7 +361,7 @@ pub fn banner_layers(reg: &Registry, nbt: Option<&Value>) -> Vec<(String, [u8; 3
     v
 }
 
-/// Texture composée d'une bannière (fond teint + motifs), mise en cache
+/// Composed banner texture (dyed base + patterns), cached
 pub fn banner_texture(reg: &Registry, base_color: &str, layers: &[(String, [u8; 3])]) -> Option<Skin> {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     base_color.hash(&mut h);
@@ -419,7 +419,7 @@ fn banner(reg: &Registry, n: &str, facing: &str, rotation: f32, nbt: Option<&Val
     }
 }
 
-/// Lits (versions sans modèle de bloc)
+/// Beds (versions without a block model)
 fn bed(reg: &Registry, n: &str, facing: &str, part: &str, out: &mut Vec<Quad>) {
     let color = n.trim_end_matches("_bed");
     let Some(sk) = skin(reg, &[e(&format!("bed/{color}"))], Tint::None) else { return };
@@ -447,7 +447,7 @@ fn wood_of(n: &str) -> String {
         .to_string()
 }
 
-/// Panneaux (versions sans modèle de bloc : textures d'entité)
+/// Signs (versions without a block model: entity textures)
 fn sign_model(reg: &Registry, n: &str, hanging: bool, wall: bool, facing: &str, rotation: f32, out: &mut Vec<Quad>) {
     let wood = wood_of(n);
     let angle = if wall { to_y_rot(facing) } else { rotation * 22.5 };
@@ -506,7 +506,7 @@ fn sign_side_lines(side: Option<&Value>, legacy: Option<&Value>) -> Option<(Vec<
     Some((lines, col))
 }
 
-/// Texture de texte mise en cache ; renvoie (id, largeur, hauteur) en pixels de police
+/// Cached text texture; returns (id, width, height) in font pixels
 pub fn text_texture(reg: &Registry, font: &Font, lines: &[Vec<Span>], line_h: u32, align: Align, bg: [u8; 4], pad: u32) -> (u32, f32, f32) {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     lines.hash(&mut h);
@@ -548,7 +548,7 @@ fn sign_text(reg: &Registry, font: &Font, hanging: bool, wall: bool, facing: &st
             p = p.ry(180.0);
         }
         let (off, s) = if hanging { ([0.0, -0.32, 0.073], 0.0140625) } else { ([0.0, 0.33333334, 0.046666667], 0.010416667) };
-        // le texte est centré : x de -w/2 à w/2, y (vers le bas) de -2 lignes à +2 lignes
+        // the text is centered: x from -w/2 to w/2, y (downwards) from -2 lines to +2 lines
         let p = p.t(off[0], off[1], off[2] + 0.001).s(s, -s, s).t(-w / 2.0, -(line_h as f32) * 2.0 + h, 0.0).s(1.0, -1.0, 1.0);
         out.push(pose::flat_quad(&p, tex, w, h, [0.0, 1.0, 1.0, 0.0]));
     }
@@ -564,7 +564,7 @@ fn decorated_pot(reg: &Registry, facing: &str, nbt: Option<&Value>, out: &mut Ve
     bx(out, &top, &base, (-14., 13.), [0., 0., 0.], [14., 0., 14.]);
     let bot = p.part([1., 0., 1.], [0.; 3]);
     bx(out, &bot, &base, (-14., 13.), [0., 0., 0.], [14., 0., 14.]);
-    // côtés : arrière, gauche, droite, avant
+    // sides: back, left, right, front
     let sherds: Vec<String> = match get(nbt, "sherds") {
         Some(Value::List(l)) => l.iter().filter_map(|v| nbt_str(Some(v))).collect(),
         _ => Vec::new(),
@@ -588,12 +588,12 @@ fn decorated_pot(reg: &Registry, facing: &str, nbt: Option<&Value>, out: &mut Ve
     }
 }
 
-/// Statue de golem de cuivre (pose debout), d'après CopperGolemModel
+/// Copper golem statue, based on CopperGolemModel
 fn copper_golem_statue(reg: &Registry, n: &str, facing: &str, pose_name: &str, out: &mut Vec<Quad>) {
     let stage = ["exposed", "weathered", "oxidized"].iter().find(|s| n.contains(*s)).map(|s| format!("_{s}")).unwrap_or_default();
     let Some(sk) = skin(reg, &[e(&format!("copper_golem/copper_golem{stage}")), e("copper_golem/copper_golem")], Tint::None) else { return };
     let base = Pose::new().t(0.5, 0.0, 0.5).ry(180.0 - to_y_rot(facing)).s(-1.0, -1.0, 1.0).t(0.0, -1.501, 0.0).t(0.0, 1.5, 0.0);
-    // (texOffs, origine, taille, gonflement) d'après CopperGolemModel
+    // (texOffs, origin, size, inflation) based on CopperGolemModel
     let c = |o: &mut Vec<Quad>, p: &Pose, uv: (f32, f32), f: [f32; 3], sz: [f32; 3], g: f32| cube(o, p, &sk, uv.0, uv.1, f, sz, g, false, ALL_FACES);
     match pose_name {
         "running" => {
@@ -648,7 +648,7 @@ fn copper_golem_statue(reg: &Registry, n: &str, facing: &str, pose_name: &str, o
     }
 }
 
-/// Direction.getRotation() (pour les entités shulker)
+/// Direction.getRotation() (for shulker entities)
 pub fn dir_rotation_pub(d: &str) -> pose::M4 {
     dir_rotation(d)
 }

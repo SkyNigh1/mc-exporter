@@ -1,5 +1,5 @@
-//! Ressources du jeu lues directement depuis le jar Minecraft installé
-//! (et éventuellement des packs de ressources par-dessus).
+//! Game resources read directly from the installed Minecraft jar
+//! (optionally with resource packs on top).
 
 use anyhow::{Context, Result, anyhow};
 use std::collections::HashMap;
@@ -66,11 +66,11 @@ pub struct Texture {
     pub w: u32,
     pub h: u32,
     pub rgba: Vec<u8>,
-    /// au moins un pixel non opaque
+    /// at least one non-opaque pixel
     pub has_alpha: bool,
-    /// au moins un pixel semi-transparent (verre teinté, eau…)
+    /// at least one semi-transparent pixel (stained glass, water…)
     pub translucent: bool,
-    /// couleur moyenne (pondérée par l'alpha), alpha moyen
+    /// average color (alpha-weighted), average alpha
     pub avg: [f32; 4],
 }
 
@@ -83,7 +83,7 @@ pub struct BiomeColors {
 }
 
 pub struct Assets {
-    layers: Vec<Layer>, // priorité décroissante
+    layers: Vec<Layer>, // decreasing priority
     pub jar_path: PathBuf,
     textures: Mutex<HashMap<String, Option<Arc<Texture>>>>,
     grass_map: Option<Arc<Texture>>,
@@ -145,7 +145,7 @@ impl Assets {
         let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?.to_rgba8();
         let (w, mut h) = img.dimensions();
         let mut rgba = img.into_raw();
-        // textures animées : on ne garde que la première image (seulement si un .mcmeta existe)
+        // animated textures: keep only the first frame (only when a .mcmeta exists)
         if first_frame && h > w && h % w == 0 && self.get(&format!("{path}.mcmeta")).is_some() {
             h = w;
             rgba.truncate((w * h * 4) as usize);
@@ -181,7 +181,7 @@ impl Assets {
         Some(Texture { w, h, rgba, has_alpha, translucent, avg })
     }
 
-    /// Enregistre une texture générée (texte de panneau, bannière composée…)
+    /// Registers a generated texture (sign text, composed banner…)
     pub fn put_texture(&self, name: &str, w: u32, h: u32, rgba: Vec<u8>) {
         let mut has_alpha = false;
         let mut translucent = false;
@@ -213,12 +213,12 @@ impl Assets {
         matches!(self.textures.lock().unwrap().get(name), Some(Some(_)))
     }
 
-    /// Première texture existante parmi plusieurs chemins possibles (les noms changent selon les versions)
+    /// First existing texture among several candidate paths (names change between versions)
     pub fn first_texture(&self, ids: &[String]) -> Option<(String, Arc<Texture>)> {
         ids.iter().find_map(|id| self.texture(id).map(|t| (id.clone(), t)))
     }
 
-    /// `id` du type "minecraft:block/stone" ou "block/stone"
+    /// `id` such as "minecraft:block/stone" or "block/stone"
     pub fn texture(&self, id: &str) -> Option<Arc<Texture>> {
         if let Some(t) = self.textures.lock().unwrap().get(id) {
             return t.clone();
@@ -303,7 +303,7 @@ fn jar_has_assets(p: &Path) -> bool {
     z.by_name("assets/minecraft/blockstates/stone.json").is_ok()
 }
 
-/// Liste les jars de .minecraft/versions qui contiennent les ressources du jeu.
+/// Lists the jars in .minecraft/versions that contain the game resources.
 pub fn list_jars(mc_dir: &Path) -> Vec<JarInfo> {
     let mut v: Vec<(std::time::SystemTime, JarInfo)> = Vec::new();
     let Ok(rd) = fs::read_dir(mc_dir.join("versions")) else { return Vec::new() };
@@ -328,7 +328,7 @@ pub fn list_jars(mc_dir: &Path) -> Vec<JarInfo> {
     v.into_iter().map(|x| x.1).collect()
 }
 
-/// Choisit le jar le plus adapté à la version du monde.
+/// Picks the jar that best matches the world version.
 pub fn pick_jar(jars: &[JarInfo], world_version: Option<&str>) -> Option<JarInfo> {
     if let Some(wv) = world_version {
         if let Some(j) = jars.iter().find(|j| j.game_version == wv && j.id == wv) {

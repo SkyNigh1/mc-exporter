@@ -1,4 +1,4 @@
-//! Construction du maillage d'une sélection : culling, fluides, biomes, fusion des faces.
+//! Mesh building for a selection: culling, fluids, biomes, face merging.
 
 use crate::registry::{BlockGeom, Dir, Fluid, Registry, Tint, canonical_uv};
 use crate::world::{Chunk, Source};
@@ -35,17 +35,17 @@ pub struct ExportOptions {
     pub prescale: u32,
     pub alpha_separate: bool,
     pub use_groups: bool,
-    /// blocs exclus de l'export (noms complets)
+    /// blocks excluded from the export (full names)
     pub excluded: Vec<String>,
-    /// coffres, bannières, têtes, panneaux…
+    /// chests, banners, heads, signs…
     pub render_block_entities: bool,
-    /// texte des panneaux
+    /// sign text
     pub sign_text: bool,
-    /// entités (displays, cadres, tableaux, porte-armures…)
+    /// entities (displays, item frames, paintings, armor stands…)
     pub render_entities: bool,
-    /// télécharger les skins des têtes de joueur absentes du cache du jeu
+    /// download player head skins missing from the game cache
     pub download_skins: bool,
-    /// remonter les ghasts pour que leurs tentacules touchent le sol
+    /// lift ghasts so that their tentacles touch the ground
     pub ghast_on_ground: bool,
 }
 
@@ -112,7 +112,7 @@ pub struct MatKey {
 }
 
 pub struct OutQuad {
-    /// coordonnées relatives à (x0, 0, z0) de la sélection
+    /// coordinates relative to the selection's (x0, 0, z0)
     pub pos: [[f32; 3]; 4],
     pub uv: [[f32; 2]; 4],
     pub mat: MatKey,
@@ -152,7 +152,7 @@ impl Ctx<'_> {
             None => 0,
         }
     }
-    /// voisin vu depuis la sélection (air si hors sélection et « côtés du monde » activé)
+    /// neighbor as seen from the selection (air if outside the selection and "world sides" is enabled)
     #[inline]
     fn neighbor(&self, x: i32, y: i32, z: i32) -> u32 {
         if !self.sel.contains(x, y, z) && self.opts.render_sides {
@@ -311,7 +311,7 @@ fn mesh_column(ctx: &Ctx, cx: i32, cz: i32) -> Partial {
                         }
                     }
                 }
-                // blocs à rendu spécial (coffres, bannières, panneaux…)
+                // specially rendered blocks (chests, banners, signs…)
                 if g.be && ctx.opts.render_block_entities {
                     let key = ctx.reg.state(id);
                     let nbt = chunk.block_entities.get(&(x, y, z));
@@ -322,7 +322,7 @@ fn mesh_column(ctx: &Ctx, cx: i32, cz: i32) -> Partial {
                         out.emit(ctx, x, y, z, q.pos, q.uv, None, mat, group, false);
                     }
                 }
-                // fluides
+                // fluids
                 let kind = fluid_kind(g);
                 if kind != 0 {
                     let level = match g.fluid {
@@ -455,7 +455,7 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
         anyhow::bail!("Export annulé");
     }
 
-    // remplacement des minerais et blocs exclus
+    // ore replacement and excluded blocks
     let excluded: HashSet<&str> = opts.excluded.iter().map(|s| s.as_str()).collect();
     let stone = reg.state_id("minecraft:stone", Vec::new());
     let deepslate = reg.state_id("minecraft:deepslate", vec![("axis".into(), "y".into())]);
@@ -529,7 +529,7 @@ pub fn build_mesh(reg: &Registry, source: &Source, sel: Selection, opts: &Export
             cells.entry(k).or_default().extend(v);
         }
     }
-    // entités
+    // entities
     if opts.render_entities {
         prog.set_stage("Entités", 1);
         let ents = source.entities(cx0, cz0, cx1, cz1);

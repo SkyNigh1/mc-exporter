@@ -1,5 +1,5 @@
-//! Lecture des mondes Minecraft Java : level.dat, dimensions, fichiers de région (Anvil)
-//! et chunks au format 1.18+ (sections avec palettes).
+//! Reading of Minecraft Java worlds: level.dat, dimensions, region files (Anvil)
+//! and 1.18+ chunks (paletted sections).
 
 use crate::registry::Registry;
 use anyhow::{Context, Result, anyhow};
@@ -65,7 +65,7 @@ impl WorldInfo {
             _ => None,
         });
 
-        // Point d'apparition : ancien format (SpawnX/SpawnZ) ou nouveau (spawn.pos)
+        // Spawn point: old format (SpawnX/SpawnZ) or new one (spawn.pos)
         let mut spawn = (0, 0);
         if let (Some(x), Some(z)) = (
             nbt_get(d, "SpawnX").and_then(nbt_int),
@@ -92,7 +92,7 @@ fn has_mca(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Gère l'ancienne structure (region/, DIM-1/, DIM1/) et la nouvelle (dimensions/<ns>/<nom>/region).
+/// Handles the old layout (region/, DIM-1/, DIM1/) and the new one (dimensions/<ns>/<name>/region).
 pub fn find_dimensions(world: &Path) -> Vec<DimInfo> {
     let mut out: Vec<DimInfo> = Vec::new();
     let mut push = |id: String, dir: PathBuf| {
@@ -100,7 +100,7 @@ pub fn find_dimensions(world: &Path) -> Vec<DimInfo> {
             out.push(DimInfo { id, source: Source::Dir(dir) });
         }
     };
-    // Nouveau format en priorité s'il contient des régions
+    // New layout first when it contains regions
     let dims_root = world.join("dimensions");
     if let Ok(nss) = fs::read_dir(&dims_root) {
         let mut found: Vec<(String, PathBuf)> = Vec::new();
@@ -118,7 +118,7 @@ pub fn find_dimensions(world: &Path) -> Vec<DimInfo> {
     push("minecraft:overworld".into(), world.join("region"));
     push("minecraft:the_nether".into(), world.join("DIM-1").join("region"));
     push("minecraft:the_end".into(), world.join("DIM1").join("region"));
-    // Dimensions sans aucune région à la fin
+    // Dimensions without any region go last
     out.sort_by_key(|d| {
         let order = match d.id.as_str() {
             "minecraft:overworld" => 0,
@@ -151,7 +151,7 @@ fn walk_dims(dir: &Path, ns: &str, rel: &str, depth: u32, out: &mut Vec<(String,
     }
 }
 
-/// Liste les régions (rx, rz) présentes dans un dossier.
+/// Lists the regions (rx, rz) present in a folder.
 pub fn list_regions(dir: &Path) -> Vec<(i32, i32)> {
     let mut v = Vec::new();
     if let Ok(rd) = fs::read_dir(dir) {
@@ -186,7 +186,7 @@ impl RegionFile {
         Some(RegionFile { data, dir: dir.to_path_buf(), rx, rz })
     }
 
-    /// NBT décompressé du chunk local (lx, lz) ∈ [0,32)
+    /// Decompressed NBT of the local chunk (lx, lz) ∈ [0,32)
     pub fn chunk_nbt(&self, lx: usize, lz: usize) -> Option<Vec<u8>> {
         let i = 4 * (lx + lz * 32);
         let h = &self.data[i..i + 4];
@@ -216,7 +216,7 @@ impl RegionFile {
                 out.extend_from_slice(payload);
                 0
             }
-            _ => return None, // LZ4 et formats personnalisés : non gérés
+            _ => return None, // LZ4 and custom formats: not supported
         };
         Some(out)
     }
@@ -266,17 +266,17 @@ struct RawBiomes {
 
 pub struct Section {
     pub y: i32,
-    /// 4096 identifiants d'état (y*256 + z*16 + x), ou 1 seul si la section est uniforme
+    /// 4096 state ids (y*256 + z*16 + x), or a single one if the section is uniform
     pub blocks: Vec<u32>,
-    /// 64 identifiants de biome (cellules 4×4×4), ou 1 seul
+    /// 64 biome ids (4×4×4 cells), or a single one
     pub biomes: Vec<u16>,
 }
 
 pub struct Chunk {
     pub cx: i32,
     pub cz: i32,
-    pub sections: Vec<Section>, // triées par y croissant
-    /// données des blocs spéciaux (coffres, panneaux, bannières…), coordonnées absolues
+    pub sections: Vec<Section>, // sorted by increasing y
+    /// block entity data (chests, signs, banners…), absolute coordinates
     pub block_entities: HashMap<(i32, i32, i32), fastnbt::Value>,
 }
 
@@ -328,7 +328,7 @@ impl Chunk {
                 unpack(&data, bits, 4096).into_iter().map(|i| *ids.get(i as usize).unwrap_or(&0)).collect()
             };
             if blocks.len() == 1 && blocks[0] == 0 {
-                continue; // section vide
+                continue; // empty section
             }
             let biomes = match s.biomes {
                 Some(b) if !b.palette.is_empty() => {
@@ -360,11 +360,11 @@ impl Chunk {
 
     #[inline]
     pub fn section(&self, sy: i32) -> Option<&Section> {
-        // peu de sections : recherche linéaire
+        // few sections: linear search
         self.sections.iter().find(|s| s.y == sy)
     }
 
-    /// Coordonnées locales x,z ∈ [0,16), y absolu
+    /// Local x,z coordinates ∈ [0,16), absolute y
     #[inline]
     pub fn block(&self, x: usize, y: i32, z: usize) -> u32 {
         match self.section(y >> 4) {
@@ -398,22 +398,22 @@ impl Chunk {
     }
 }
 
-/// D'où viennent les chunks : un dossier de régions, ou un monde construit en mémoire (schematic).
+/// Where chunks come from: a region folder, or an in-memory world (schematic).
 #[derive(Clone)]
 pub enum Source {
     Dir(PathBuf),
     Mem(Arc<MemWorld>),
 }
 
-/// Monde construit en mémoire (schematic importé)
+/// In-memory world (imported schematic)
 pub struct MemWorld {
     pub chunks: HashMap<(i32, i32), Arc<Chunk>>,
-    /// entités avec leur position (Pos) déjà ramenée dans le repère du monde vide
+    /// entities with their position (Pos) already moved into the empty world's frame
     pub entities: Vec<fastnbt::Value>,
 }
 
 impl Source {
-    /// Dossier racine du monde (celui qui contient level.dat)
+    /// Root folder of the world (the one containing level.dat)
     pub fn world_dir(&self) -> Option<PathBuf> {
         match self {
             Source::Dir(d) => d.ancestors().find(|p| p.join("level.dat").is_file()).map(|p| p.to_path_buf()),
@@ -421,7 +421,7 @@ impl Source {
         }
     }
 
-    /// Entités des chunks [cx0..=cx1] × [cz0..=cz1]
+    /// Entities of chunks [cx0..=cx1] × [cz0..=cz1]
     pub fn entities(&self, cx0: i32, cz0: i32, cx1: i32, cz1: i32) -> Vec<fastnbt::Value> {
         let inside = |e: &fastnbt::Value| {
             crate::entity::entity_pos(e)
@@ -434,7 +434,7 @@ impl Source {
         match self {
             Source::Mem(m) => m.entities.iter().filter(|e| inside(e)).cloned().collect(),
             Source::Dir(dir) => {
-                // 1.17+ : les entités sont dans <dimension>/entities/r.x.z.mca
+                // 1.17+: entities are stored in <dimension>/entities/r.x.z.mca
                 let Some(edir) = dir.parent().map(|p| p.join("entities")) else { return Vec::new() };
                 let mut out = Vec::new();
                 for rx in cx0.div_euclid(32)..=cx1.div_euclid(32) {
@@ -474,7 +474,7 @@ impl Source {
         }
     }
 
-    /// Tous les chunks d'une région.
+    /// All chunks of a region.
     pub fn region_chunks(&self, rx: i32, rz: i32, reg: &Registry) -> Vec<Arc<Chunk>> {
         match self {
             Source::Mem(m) => m
@@ -500,7 +500,7 @@ impl Source {
         }
     }
 
-    /// Les chunks [cx0..=cx1] × [cz0..=cz1].
+    /// Chunks [cx0..=cx1] × [cz0..=cz1].
     pub fn chunks(&self, cx0: i32, cz0: i32, cx1: i32, cz1: i32, reg: &Registry) -> HashMap<(i32, i32), Arc<Chunk>> {
         use rayon::prelude::*;
         match self {
@@ -546,7 +546,7 @@ impl Source {
     }
 }
 
-/// Ajoute une entité et ses passagers (un porte-armure sur un wagonnet…)
+/// Adds an entity and its passengers (an armor stand in a minecart…)
 pub fn flatten_passengers(e: &fastnbt::Value, out: &mut Vec<fastnbt::Value>) {
     out.push(e.clone());
     if let Some(fastnbt::Value::List(p)) = nbt_get(e, "Passengers") {
@@ -556,7 +556,7 @@ pub fn flatten_passengers(e: &fastnbt::Value, out: &mut Vec<fastnbt::Value>) {
     }
 }
 
-/// Construit des chunks en mémoire à partir d'une liste de blocs (x, y, z, état).
+/// Builds in-memory chunks from a list of blocks (x, y, z, state).
 pub fn build_chunks(
     blocks: impl Iterator<Item = (i32, i32, i32, u32)>,
     mut bes: HashMap<(i32, i32, i32), fastnbt::Value>,
@@ -586,7 +586,7 @@ pub fn build_chunks(
         .collect()
 }
 
-/// Liste les sauvegardes du dossier .minecraft/saves
+/// Lists the saves in the .minecraft/saves folder
 pub fn list_saves(mc_dir: &Path) -> Vec<(String, PathBuf)> {
     let mut v = Vec::new();
     if let Ok(rd) = fs::read_dir(mc_dir.join("saves")) {

@@ -1,4 +1,4 @@
-//! Équivalent du PoseStack / ModelPart de Minecraft : matrices 4×4 et cubes de modèles d'entités.
+//! Equivalent of Minecraft's PoseStack / ModelPart: 4×4 matrices and entity model cubes.
 
 use crate::registry::{Quad, Tint};
 
@@ -45,7 +45,7 @@ pub fn rot_z(a: f32) -> M4 {
     [[c, -s, 0., 0.], [s, c, 0., 0.], [0., 0., 1., 0.], [0., 0., 0., 1.]]
 }
 
-/// Quaternion (x, y, z, w) → matrice
+/// Quaternion (x, y, z, w) → matrix
 pub fn quat(q: [f32; 4]) -> M4 {
     let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt().max(1e-9);
     let (x, y, z, w) = (q[0] / n, q[1] / n, q[2] / n, q[3] / n);
@@ -57,7 +57,7 @@ pub fn quat(q: [f32; 4]) -> M4 {
     ]
 }
 
-/// PoseStack simplifié
+/// Simplified PoseStack
 #[derive(Clone, Copy)]
 pub struct Pose(pub M4);
 
@@ -92,12 +92,12 @@ impl Pose {
         self.0 = mul(&self.0, m);
         self
     }
-    /// ModelPart.translateAndRotate : offset en pixels, rotations en radians (ordre ZYX)
+    /// ModelPart.translateAndRotate: offset in pixels, rotations in radians (ZYX order)
     pub fn part(self, offset: [f32; 3], rot: [f32; 3]) -> Pose {
         let p = self.t(offset[0] / 16.0, offset[1] / 16.0, offset[2] / 16.0);
         Pose(mul(&p.0, &mul(&rot_z(rot[2]), &mul(&rot_y(rot[1]), &rot_x(rot[0])))))
     }
-    /// Comme `part`, avec une échelle de pièce (PartPose.scaled)
+    /// Like `part`, with a part scale (PartPose.scaled)
     pub fn part_s(self, offset: [f32; 3], rot: [f32; 3], scale: f32) -> Pose {
         self.part(offset, rot).s(scale, scale, scale)
     }
@@ -115,7 +115,7 @@ impl Pose {
         m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
             + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
     }
-    /// Transforme un quad (positions) en conservant l'orientation des faces.
+    /// Transforms a quad (positions) while preserving face orientation.
     pub fn quad(&self, q: &Quad) -> Quad {
         let mut o = q.clone();
         for i in 0..4 {
@@ -131,7 +131,7 @@ impl Pose {
     }
 }
 
-/// Texture d'entité pour la construction de cubes
+/// Entity texture used to build cubes
 #[derive(Clone, Copy)]
 pub struct Skin {
     pub tex: u32,
@@ -148,13 +148,13 @@ pub const F_NORTH: u8 = 8;
 pub const F_EAST: u8 = 16;
 pub const F_SOUTH: u8 = 32;
 
-/// Reproduit ModelPart.Cube : boîte en pixels, UV au gabarit standard.
+/// Reproduces ModelPart.Cube: box in pixels, UVs in the standard layout.
 #[allow(clippy::too_many_arguments)]
 pub fn cube(out: &mut Vec<Quad>, pose: &Pose, sk: &Skin, u: f32, v: f32, from: [f32; 3], size: [f32; 3], grow: f32, mirror: bool, faces: u8) {
     cube_uv(out, pose, sk, u, v, from, size, size, grow, mirror, faces)
 }
 
-/// Comme `cube`, avec une taille de zone de texture différente de la taille géométrique
+/// Like `cube`, with a texture area size that differs from the geometric size
 #[allow(clippy::too_many_arguments)]
 pub fn cube_uv(out: &mut Vec<Quad>, pose: &Pose, sk: &Skin, u: f32, v: f32, from: [f32; 3], size: [f32; 3], uvsize: [f32; 3], grow: f32, mirror: bool, faces: u8) {
     let (w, h, d) = (size[0], size[1], size[2]);
@@ -194,18 +194,18 @@ pub fn cube_uv(out: &mut Vec<Quad>, pose: &Pose, sk: &Skin, u: f32, v: f32, from
             pos = [pos[3], pos[2], pos[1], pos[0]];
             uvs = [uvs[3], uvs[2], uvs[1], uvs[0]];
         }
-        // faces dégénérées (épaisseur nulle sur les deux axes du plan)
+        // degenerate faces (zero thickness on both in-plane axes)
         let q = Quad { pos, uv: uvs, tex: sk.tex, tint: sk.tint, cull: None, dir: None, flat: w == 0.0 || h == 0.0 || d == 0.0 };
         out.push(pose.quad(&q));
     }
 }
 
-/// Raccourci : cube sans gonflement ni miroir
+/// Shortcut: cube without inflation or mirroring
 pub fn bx(out: &mut Vec<Quad>, pose: &Pose, sk: &Skin, uv: (f32, f32), from: [f32; 3], size: [f32; 3]) {
     cube(out, pose, sk, uv.0, uv.1, from, size, 0.0, false, ALL_FACES);
 }
 
-/// Quad plat texturé dans le plan z = 0 (x vers la droite, y vers le haut), face vers +z.
+/// Flat textured quad in the z = 0 plane (x to the right, y up), facing +z.
 pub fn flat_quad(pose: &Pose, tex: u32, w: f32, h: f32, uv: [f32; 4]) -> Quad {
     let q = Quad {
         pos: [[0., 0., 0.], [w, 0., 0.], [w, h, 0.], [0., h, 0.]],

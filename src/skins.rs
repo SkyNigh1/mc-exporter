@@ -1,5 +1,5 @@
-//! Skins des têtes de joueur : lues dans le cache du jeu (.minecraft/assets/skins),
-//! sinon téléchargées depuis les serveurs de Mojang (si l'option est activée), puis mises en cache.
+//! Player head skins: read from the game cache (.minecraft/assets/skins),
+//! otherwise downloaded from Mojang's servers (when the option is enabled), then cached.
 
 use crate::registry::Registry;
 use fastnbt::Value;
@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// téléchargement autorisé pour l'export en cours
+/// download allowed for the current export
 pub static DOWNLOAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 static CACHE: Mutex<Option<HashMap<String, Option<String>>>> = Mutex::new(None);
@@ -49,7 +49,7 @@ pub fn b64_decode(input: &str) -> Vec<u8> {
     out
 }
 
-/// Valeur base64 « textures » d'un profil (formats 1.20.5+ et anciens)
+/// Base64 "textures" value of a profile (1.20.5+ and older formats)
 fn textures_value(p: &Value) -> Option<String> {
     if let Some(Value::List(props)) = get(Some(p), "properties") {
         for pr in props {
@@ -107,7 +107,7 @@ fn png_for_hash(hash: &str, url: &str, download: bool) -> Option<Vec<u8>> {
     Some(b)
 }
 
-/// Texture (nom interne) de la skin d'un profil de tête de joueur
+/// Texture (internal name) of a player head profile's skin
 pub fn skin_for_profile(reg: &Registry, profile: &Value, download: bool) -> Option<String> {
     let key = textures_value(profile).or_else(|| profile_name(profile).map(|n| format!("name:{}", n.to_lowercase())))?;
     if let Some(c) = CACHE.lock().unwrap().get_or_insert_with(HashMap::new).get(&key) {
@@ -136,7 +136,7 @@ pub fn skin_for_profile(reg: &Registry, profile: &Value, download: bool) -> Opti
             let img = image::load_from_memory(&png).ok()?.to_rgba8();
             let (w, h) = img.dimensions();
             let mut px = img.into_raw();
-            // comme le jeu : les zones de base (tête, corps, membres) sont toujours opaques
+            // like the game: base areas (head, body, limbs) are always opaque
             let s = w as f32 / 64.0;
             let mut opaque = |x0: u32, y0: u32, x1: u32, y1: u32| {
                 let (x0, y0, x1, y1) = ((x0 as f32 * s) as u32, (y0 as f32 * s) as u32, (x1 as f32 * s) as u32, (y1 as f32 * s) as u32);
@@ -159,7 +159,7 @@ pub fn skin_for_profile(reg: &Registry, profile: &Value, download: bool) -> Opti
     result
 }
 
-/// Profil depuis les données d'un bloc tête ou d'un objet tête
+/// Profile from the data of a head block or head item
 pub fn profile_of(nbt: Option<&Value>) -> Option<&Value> {
     get(nbt, "profile")
         .or_else(|| get(nbt, "SkullOwner"))

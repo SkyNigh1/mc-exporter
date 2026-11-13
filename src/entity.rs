@@ -1,5 +1,5 @@
-//! Entités : block/item/text displays, cadres, tableaux, porte-armures, wagonnets, bateaux,
-//! blocs qui tombent et quelques animaux. Les modèles reprennent les dimensions du jeu.
+//! Entities: block/item/text displays, item frames, paintings, armor stands, minecarts, boats,
+//! falling blocks and a few animals. Models use the game's dimensions.
 
 use crate::bent::{self, BeOpts, COLORS, dye_diffuse, e, skin};
 use crate::font::{self, Align, Font};
@@ -52,7 +52,7 @@ fn short(id: &str) -> &str {
     id.strip_prefix("minecraft:").unwrap_or(id)
 }
 
-/// Position d'une entité
+/// Position of an entity
 pub fn entity_pos(e: &Value) -> Option<[f64; 3]> {
     match get(Some(e), "Pos") {
         Some(Value::List(l)) if l.len() >= 3 => Some([num(&l[0])?, num(&l[1])?, num(&l[2])?]),
@@ -63,11 +63,11 @@ pub fn entity_pos(e: &Value) -> Option<[f64; 3]> {
 pub struct EntOpts {
     pub sign_text: bool,
     pub download_skins: bool,
-    /// dossier du monde (pour les cartes dans les cadres)
+    /// world folder (for maps in item frames)
     pub world_dir: Option<std::path::PathBuf>,
 }
 
-// ───────────────────────────── objets (items) ─────────────────────────────
+// ───────────────────────────── items ─────────────────────────────
 
 enum ItemModel {
     Model(String),
@@ -104,7 +104,7 @@ fn find_item_model(v: &serde_json::Value) -> Option<ItemModel> {
     o.get("on_true").and_then(find_item_model)
 }
 
-/// Image plate extrudée (item/generated), dans l'espace [0,1]³
+/// Extruded flat sprite (item/generated), in [0,1]³ space
 fn sprite_quads(reg: &Registry, layers: &[String]) -> Vec<Quad> {
     let mut out = Vec::new();
     for (li, tname) in layers.iter().enumerate() {
@@ -152,7 +152,7 @@ fn item_id(item: &Value) -> Option<String> {
     if id == "minecraft:air" { None } else { Some(id) }
 }
 
-/// Quads d'un objet, transformés pour le contexte d'affichage (fixed, head, ground…, ou "none")
+/// Quads of an item, transformed for the display context (fixed, head, ground…, or "none")
 pub fn item_quads(reg: &Registry, font: &Font, item: &Value, ctx: &str) -> Vec<Quad> {
     let Some(id) = item_id(item) else { return Vec::new() };
     let (ns, p) = id.split_once(':').unwrap();
@@ -206,7 +206,7 @@ pub fn item_quads(reg: &Registry, font: &Font, item: &Value, ctx: &str) -> Vec<Q
     geom.iter().map(|q| pose.quad(q)).collect()
 }
 
-// ───────────────────────────── entités ─────────────────────────────
+// ───────────────────────────── entities ─────────────────────────────
 
 fn transformation(v: Option<&Value>) -> M4 {
     match v {
@@ -254,7 +254,7 @@ fn living_base(pos: [f64; 3], yaw: f32) -> Pose {
     Pose::new().t(pos[0] as f32, pos[1] as f32, pos[2] as f32).ry(180.0 - yaw).s(-1.0, -1.0, 1.0).t(0.0, -1.501, 0.0)
 }
 
-/// Quads d'une entité, en coordonnées monde
+/// Quads of an entity, in world coordinates
 pub fn entity_quads(reg: &Registry, font: &Font, ent: &Value, o: &EntOpts) -> Vec<Quad> {
     let mut out = Vec::new();
     let Some(id) = string(get(Some(ent), "id")) else { return out };
@@ -418,10 +418,10 @@ fn painting(reg: &Registry, ent: &Value, pos: [f64; 3], out: &mut Vec<Quad>) {
     let back = reg.assets.texture("minecraft:painting/back").map(|_| reg.tex_id("minecraft:painting/back"));
     let facing = int(get(Some(ent), "facing")).or_else(|| int(get(Some(ent), "Facing"))).unwrap_or(0);
     let angle = match facing {
-        1 => -90.0, // ouest
-        2 => 180.0, // nord
-        3 => 90.0,  // est
-        _ => 0.0,   // sud
+        1 => -90.0, // west
+        2 => 180.0, // north
+        3 => 90.0,  // east
+        _ => 0.0,   // south
     };
     let base = Pose::new().t(pos[0] as f32, pos[1] as f32, pos[2] as f32).ry(angle);
     let d = 1.0 / 32.0;
@@ -430,7 +430,7 @@ fn painting(reg: &Registry, ent: &Value, pos: [f64; 3], out: &mut Vec<Quad>) {
     if let Some(b) = back {
         let pb = base.ry(180.0).t(-w / 2.0, -h / 2.0, d);
         out.push(pose::flat_quad(&pb, b, w, h, [0.0, h, w, 0.0]));
-        // tranches
+        // edges
         let edge = |p: Pose, l: f32| pose::flat_quad(&p, b, l, 2.0 * d, [0.0, 1.0 / 16.0, l, 0.0]);
         out.push(edge(base.t(-w / 2.0, h / 2.0, d).rx(-90.0), w));
         out.push(edge(base.t(w / 2.0, -h / 2.0, d).rz(180.0).rx(-90.0), w));
@@ -500,7 +500,7 @@ fn armor_stand(reg: &Registry, font: &Font, ent: &Value, pos: [f64; 3], yaw: f32
             }
         }
     }
-    // armure
+    // armor
     let limbs = crate::mobs::Limbs {
         head: ([0., 1., 0.], head),
         body: ([0.; 3], body),
@@ -510,12 +510,12 @@ fn armor_stand(reg: &Registry, font: &Font, ent: &Value, pos: [f64; 3], yaw: f32
         lleg: ([1.9, 12., 0.], lleg),
     };
     crate::mobs::armor(reg, ent, &base, &limbs, true, out);
-    // objet sur la tête (bloc, tête de joueur…)
+    // item on the head (block, player head…)
     if let Some(it) = equipment(ent, "head").filter(|v| !item_id(v).map(|i| i.ends_with("_helmet")).unwrap_or(false)) {
         let p = head_p.t(0.0, -0.25, 0.0).ry(180.0).s(0.625, -0.625, -0.625);
         out.extend(item_quads(reg, font, it, "head").iter().map(|q| p.quad(q)));
     }
-    // objets en main
+    // held items
     for (slot, arm, left) in [("mainhand", rarm_p, false), ("offhand", larm_p, true)] {
         if let Some(it) = equipment(ent, slot) {
             let p = arm.rx(-90.0).ry(180.0).t(if left { -1.0 } else { 1.0 } / 16.0, 0.125, -0.625);
@@ -528,7 +528,7 @@ fn armor_stand(reg: &Registry, font: &Font, ent: &Value, pos: [f64; 3], yaw: f32
 #[allow(clippy::too_many_arguments)]
 fn minecart(reg: &Registry, font: &Font, id: &str, ent: &Value, pos: [f64; 3], yaw: f32, pitch: f32, be: &BeOpts, out: &mut Vec<Quad>) {
     let p = Pose::new().t(pos[0] as f32, pos[1] as f32, pos[2] as f32).t(0.0, 0.375, 0.0).ry(180.0 - yaw).rz(-pitch);
-    // contenu
+    // contents
     let content = match id {
         "chest_minecart" => Some("minecraft:chest"),
         "furnace_minecart" => Some("minecraft:furnace"),
@@ -695,7 +695,7 @@ fn animal(reg: &Registry, id: &str, ent: &Value, pos: [f64; 3], yaw: f32, out: &
     }
 }
 
-/// Coupe les lignes trop longues (text displays : line_width, 200 px par défaut)
+/// Wraps lines that are too long (text displays: line_width, 200 px by default)
 fn wrap(font: &Font, lines: Vec<Vec<font::Span>>, width: f32) -> Vec<Vec<font::Span>> {
     let mut out = Vec::new();
     for line in lines {
@@ -705,7 +705,7 @@ fn wrap(font: &Font, lines: Vec<Vec<font::Span>>, width: f32) -> Vec<Vec<font::S
         for ch in chars {
             let a = font.advance(ch.0);
             if w + a > width && !cur.is_empty() {
-                // coupe au dernier espace si possible
+                // break at the last space when possible
                 let cut = cur.iter().rposition(|(c, _)| *c == ' ').filter(|&i| i > 0);
                 let rest: Vec<(char, [u8; 3])> = match cut {
                     Some(i) => {
@@ -738,7 +738,7 @@ fn regroup(chars: &[(char, [u8; 3])]) -> Vec<font::Span> {
     v
 }
 
-/// Couleurs de base des cartes (MapColor), dans l'ordre des identifiants
+/// Base map colors (MapColor), in id order
 const MAP_COLORS: [u32; 62] = [
     0, 8368696, 16247203, 13092807, 16711680, 10526975, 10987431, 31744, 16777215, 10791096, 9923917, 7368816, 4210943,
     9402184, 16776437, 14188339, 11685080, 6724056, 15066419, 8375321, 15892389, 5000268, 10066329, 5013401, 8339378,
@@ -773,7 +773,7 @@ fn find_map_file(world: &std::path::Path, id: i64) -> Option<std::path::PathBuf>
     walk(&world.join("data"), &name, 0)
 }
 
-/// Texture 128×128 d'une carte (map_<id>.dat), mise en cache
+/// 128×128 texture of a map (map_<id>.dat), cached
 fn map_texture(reg: &Registry, world: Option<&std::path::Path>, item: &Value) -> Option<u32> {
     let id = int(get(get(Some(item), "components"), "minecraft:map_id"))
         .or_else(|| int(get(get(Some(item), "tag"), "map")))?;

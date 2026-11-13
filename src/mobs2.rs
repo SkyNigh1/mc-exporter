@@ -1,5 +1,5 @@
-//! Suite des mobs : monstres, illageois, créatures aquatiques, boss… (dimensions lues dans
-//! les classes de modèles du jeu 26.x), plus objets au sol, TNT amorcée et cristaux de l'End.
+//! More mobs: monsters, illagers, aquatic creatures, bosses… (dimensions read from
+//! the game's 26.x model classes), plus dropped items, primed TNT and end crystals.
 
 use crate::bent::{COLORS, dye_diffuse, e, skin};
 use crate::mobs::{Limbs, equipment, get, held_items, int, living, string};
@@ -10,10 +10,10 @@ use std::f32::consts::PI;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Remonter les ghasts pour que leurs tentacules touchent le sol (option)
+/// Lift ghasts so that their tentacles touch the ground (option)
 pub static GHAST_GROUND: AtomicBool = AtomicBool::new(false);
 
-/// Calques teintés fusionnés en une texture (poissons tropicaux…)
+/// Tinted layers merged into one texture (tropical fish…)
 fn tinted(reg: &Registry, layers: &[(Vec<String>, Option<[u8; 3]>)]) -> Option<Skin> {
     let mut found = Vec::new();
     for (c, t) in layers {
@@ -54,7 +54,7 @@ fn m(out: &mut Vec<Quad>, p: &Pose, sk: &Skin, uv: (f32, f32), f: [f32; 3], s: [
     cube(out, p, sk, uv.0, uv.1, f, s, 0.0, true, ALL_FACES);
 }
 
-/// Segments alignés (poisson d'argent, endermite) : tailles, UV ; renvoie la position z de chaque segment
+/// Aligned segments (silverfish, endermite): sizes, UVs; returns the z position of each segment
 fn segments(out: &mut Vec<Quad>, b: &Pose, sk: &Skin, sizes: &[[f32; 3]], uvs: &[(f32, f32)]) -> Vec<f32> {
     let mut z = -3.5;
     let mut zs = Vec::new();
@@ -98,7 +98,7 @@ pub fn more_mob(reg: &Registry, id: &str, ent: &Value, pos: [f64; 3], yaw: f32, 
             let Some(sk) = tex(&["blaze/blaze", "blaze"]) else { return true };
             let b = living(pos, yaw, 1.0);
             bx(out, &b, &sk, (0., 0.), [-4., -4., -4.], [8., 8., 8.]);
-            // trois anneaux de bâtons (BlazeModel.setupAnim au repos)
+            // three rings of rods (BlazeModel.setupAnim at rest)
             let mut f: f32 = 0.0;
             for i in 0..4 {
                 let y = -2.0 + ((i * 2) as f32 * 0.25).cos();
@@ -654,7 +654,7 @@ pub fn more_mob(reg: &Registry, id: &str, ent: &Value, pos: [f64; 3], yaw: f32, 
             crate::mobs::armor(reg, ent, &b, &l, false, out);
             held_items(reg, ent, &b, &l, true, out);
         }
-        // objets lâchés, TNT amorcée, cristal de l'End
+        // dropped items, primed TNT, end crystal
         "item" => {
             let Some(it) = get(Some(ent), "Item") else { return true };
             let p = Pose::new().t(pos[0] as f32, pos[1] as f32 + 0.1, pos[2] as f32).ry(-yaw);
@@ -756,7 +756,7 @@ pub fn more_mob(reg: &Registry, id: &str, ent: &Value, pos: [f64; 3], yaw: f32, 
         }
         _ => return false,
     }
-    // équipement porté par les illageois/vindicateurs (haches tenues) non affiché quand bras croisés
+    // equipment held by illagers (vindicator axes) is not shown when arms are crossed
     let _ = equipment(ent, "mainhand");
     true
 }

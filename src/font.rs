@@ -1,4 +1,4 @@
-//! Police bitmap du jeu (ascii, accented, nonlatin…) et composants de texte (JSON ou NBT).
+//! Game bitmap font (ascii, accented, nonlatin…) and text components (JSON or NBT).
 
 use crate::assets::{Assets, Texture};
 use fastnbt::Value;
@@ -11,7 +11,7 @@ struct Glyph {
     y: u32,
     cw: u32,
     ch: u32,
-    /// hauteur d'affichage (en pixels de police) et décalage vertical
+    /// display height (in font pixels) and vertical offset
     height: f32,
     ascent: f32,
     width: f32,
@@ -21,7 +21,7 @@ pub struct Font {
     glyphs: HashMap<char, Glyph>,
 }
 
-/// Segment de texte coloré
+/// Colored text segment
 pub type Span = (String, [u8; 3]);
 
 impl Font {
@@ -73,7 +73,7 @@ impl Font {
                     continue;
                 }
                 let (x0, y0) = (rx as u32 * cw, ry as u32 * ch);
-                // largeur réelle : dernière colonne non transparente
+                // actual width: last non-transparent column
                 let mut last: i32 = -1;
                 for x in 0..cw {
                     for y in 0..ch {
@@ -101,8 +101,8 @@ impl Font {
         spans.iter().flat_map(|(s, _)| s.chars()).map(|c| self.advance(c)).sum()
     }
 
-    /// Dessine des lignes (centrées ou alignées) dans une image RGBA. `line_h` = hauteur de ligne en pixels.
-    /// Retourne (largeur, hauteur, pixels).
+    /// Draws lines (centered or aligned) into an RGBA image. `line_h` = line height in pixels.
+    /// Returns (width, height, pixels).
     pub fn render(&self, lines: &[Vec<Span>], line_h: u32, align: Align, bg: [u8; 4], pad: u32) -> (u32, u32, Vec<u8>) {
         let widths: Vec<f32> = lines.iter().map(|l| self.width(l)).collect();
         let maxw = widths.iter().cloned().fold(0.0, f32::max).ceil() as u32;
@@ -134,7 +134,7 @@ impl Font {
                                 if a == 0 {
                                     continue;
                                 }
-                                // échantillonnage au plus proche si la glyphe est plus grande que 8 px
+                                // nearest-neighbor sampling when the glyph is larger than 8 px
                                 let px = (x + xx as f32 * scale) as i32;
                                 let py = (gy0 + yy as f32 * scale) as i32;
                                 let reps = scale.ceil().max(1.0) as i32;
@@ -197,7 +197,7 @@ pub fn named_color(s: &str) -> Option<[u8; 3]> {
     Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
 }
 
-/// Couleur de texte des teintures (panneaux)
+/// Dye text color (signs)
 pub fn dye_text_color(s: &str) -> [u8; 3] {
     let n: u32 = match s {
         "white" => 0xFFFFFF,
@@ -287,7 +287,7 @@ fn flatten_nbt(v: &Value, color: [u8; 3], out: &mut Vec<Span>) {
     }
 }
 
-/// Composant de texte (NBT ou chaîne JSON) → lignes de segments colorés
+/// Text component (NBT or JSON string) → lines of colored segments
 pub fn component_lines(v: &Value, default: [u8; 3]) -> Vec<Vec<Span>> {
     let mut spans = Vec::new();
     flatten_nbt(v, default, &mut spans);

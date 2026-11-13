@@ -1,5 +1,5 @@
-//! Décorations des montures et objets portés : selles, armures (cheval, loup, nautile),
-//! tapis et coffres de lama, coffres d'âne, harnais du happy ghast, objets sur la tête des mobs.
+//! Mount decorations and worn items: saddles, armor (horse, wolf, nautilus),
+//! llama carpets and chests, donkey chests, happy ghast harness, items worn on mob heads.
 
 use crate::bent::e;
 use crate::mobs::{get, int, string};
@@ -9,7 +9,7 @@ use fastnbt::Value;
 use std::f32::consts::PI;
 use std::hash::{Hash, Hasher};
 
-/// Objet porté sur le corps (armure de cheval, tapis de lama, armure de loup, harnais)
+/// Item worn on the body (horse armor, llama carpet, wolf armor, harness)
 pub fn body_item(ent: &Value) -> Option<&Value> {
     get(get(Some(ent), "equipment"), "body")
         .or_else(|| get(Some(ent), "body_armor_item"))
@@ -28,7 +28,7 @@ pub fn chested(ent: &Value) -> bool {
     int(get(Some(ent), "ChestedHorse")).unwrap_or(0) != 0
 }
 
-/// Identifiant d'équipement d'un objet (iron_horse_armor → iron, white_carpet → white…)
+/// Equipment asset id of an item (iron_horse_armor → iron, golden → gold…)
 fn asset_of(item_id: &str) -> String {
     let s = item_id
         .trim_end_matches("_horse_armor")
@@ -49,7 +49,7 @@ fn dyed(item: Option<&Value>) -> Option<[u8; 3]> {
     Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
 }
 
-/// Texture d'un calque d'équipement (format 1.21.2+ : equipment/<asset>.json), calques teints fusionnés
+/// Texture of an equipment layer (1.21.2+ format: equipment/<asset>.json), dyed layers merged
 pub fn equip_skin(reg: &Registry, asset: &str, kind: &str, item: Option<&Value>, fallback: &[String]) -> Option<Skin> {
     let mut layers: Vec<(String, Option<[u8; 3]>)> = Vec::new();
     if let Some(j) = reg.assets.json(&format!("assets/minecraft/equipment/{asset}.json")) {
@@ -114,7 +114,7 @@ fn body_skin(reg: &Registry, ent: &Value, kind: &str, fallback: impl Fn(&str) ->
     equip_skin(reg, &asset, kind, Some(it), &fallback(&asset))
 }
 
-// ───────────── cochon ─────────────
+// ───────────── pig ─────────────
 
 pub fn pig(reg: &Registry, ent: &Value, base: &Pose, out: &mut Vec<Quad>) {
     if !has_saddle(ent) {
@@ -131,7 +131,7 @@ pub fn pig(reg: &Registry, ent: &Value, base: &Pose, out: &mut Vec<Quad>) {
     }
 }
 
-// ───────────── chevaux, ânes, mules ─────────────
+// ───────────── horses, donkeys, mules ─────────────
 
 fn horse_geo(out: &mut Vec<Quad>, b: &Pose, sk: &Skin, g: f32) {
     let body = b.part([0., 11., 5.], [0.; 3]);
@@ -148,7 +148,7 @@ fn horse_geo(out: &mut Vec<Quad>, b: &Pose, sk: &Skin, g: f32) {
     cube(out, &b.part([-4., 14., -10.], [0.; 3]), sk, 48., 21., [-1., -1.01, -1.9], [4., 11., 4.], g, false, ALL_FACES);
 }
 
-/// Selle, armure et coffres des équidés. `own` : texture du cheval (anciennes versions : la selle y est dessinée)
+/// Saddle, armor and chests of equines. `own`: the horse texture (older versions draw the saddle in it)
 pub fn horse(reg: &Registry, ent: &Value, id: &str, b: &Pose, own: &Skin, out: &mut Vec<Quad>) {
     if id == "horse" {
         if let Some(sk) = body_skin(reg, ent, "horse_body", |a| vec![e(&format!("horse/armor/horse_armor_{a}"))]) {
@@ -175,7 +175,7 @@ pub fn horse(reg: &Registry, ent: &Value, id: &str, b: &Pose, own: &Skin, out: &
     }
 }
 
-// ───────────── lamas ─────────────
+// ───────────── llamas ─────────────
 
 pub fn llama(reg: &Registry, ent: &Value, id: &str, b: &Pose, own: &Skin, out: &mut Vec<Quad>) {
     if chested(ent) {
@@ -197,7 +197,7 @@ pub fn llama(reg: &Registry, ent: &Value, id: &str, b: &Pose, own: &Skin, out: &
     }
 }
 
-// ───────────── loup ─────────────
+// ───────────── wolf ─────────────
 
 pub fn wolf(reg: &Registry, ent: &Value, b: &Pose, out: &mut Vec<Quad>) {
     let Some(sk) = body_skin(reg, ent, "wolf_body", |_| vec![e("wolf/wolf_armor")]) else { return };
@@ -215,14 +215,14 @@ pub fn wolf(reg: &Registry, ent: &Value, b: &Pose, out: &mut Vec<Quad>) {
     cube(out, &b.part([-1., 12., 8.], [0.62831855, 0., 0.]), &sk, 9., 18., [0., 0., -1.], [2., 8., 2.], g, false, ALL_FACES);
 }
 
-// ───────────── arpenteur, chameau, nautile, happy ghast ─────────────
+// ───────────── strider, camel, nautilus, happy ghast ─────────────
 
 pub fn strider(reg: &Registry, ent: &Value, b: &Pose, out: &mut Vec<Quad>) {
     if !has_saddle(ent) {
         return;
     }
     let Some(sk) = saddle_skin(reg, "strider_saddle", &[e("strider/strider_saddle")]) else { return };
-    // même géométrie que le corps : léger gonflement pour éviter les faces confondues
+    // same geometry as the body: slight inflation to avoid coplanar faces
     cube(out, &b.part([0., 1., 0.], [0.; 3]), &sk, 0., 0., [-8., -6., -8.], [16., 14., 16.], 0.02, false, ALL_FACES);
 }
 
@@ -268,7 +268,7 @@ pub fn happy_ghast(reg: &Registry, ent: &Value, b: &Pose, out: &mut Vec<Quad>) {
     cube(out, &b.part([0., 14., -5.5], [0.; 3]), &sk, 0., 32., [-8., -2.5, -2.5], [16., 5., 5.], 0.15, false, ALL_FACES);
 }
 
-// ───────────── objet porté sur la tête (CustomHeadLayer) ─────────────
+// ───────────── item worn on the head (CustomHeadLayer) ─────────────
 
 pub fn head_item(reg: &Registry, ent: &Value, head: &Pose, out: &mut Vec<Quad>) {
     let Some(it) = crate::mobs::equipment(ent, "head") else { return };

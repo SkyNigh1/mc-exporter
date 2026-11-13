@@ -1,4 +1,4 @@
-//! Écriture OBJ + MTL + textures PNG.
+//! OBJ + MTL + PNG texture writer.
 
 use crate::mesh::{ExportOptions, MatKey, Mesh, OffsetMode, Progress};
 use crate::registry::{Registry, UNKNOWN_TEX};
@@ -52,7 +52,7 @@ pub fn write_obj(reg: &Registry, mesh: &Mesh, opts: &ExportOptions, obj_path: &P
     let tex_dir_name = format!("{stem}_tex");
     let tex_dir = dir.join(&tex_dir_name);
 
-    // matériaux utilisés et noms
+    // used materials and their names
     let mut mats: Vec<MatKey> = mesh.quads.iter().map(|q| q.mat).collect();
     mats.sort();
     mats.dedup();

@@ -1,4 +1,4 @@
-//! Rendu de la carte vue de dessus, une image 512×512 par région.
+//! Top-down map rendering, one 512×512 image per region.
 
 use crate::registry::{Fluid, Registry, Tint};
 use crate::world::Source;
@@ -9,7 +9,7 @@ pub struct RegionMap {
     pub rx: i32,
     pub rz: i32,
     pub rgba: Vec<u8>,
-    /// état du bloc visible (0 = rien)
+    /// visible block state (0 = nothing)
     pub top: Vec<u32>,
     pub height: Vec<i16>,
 }
@@ -105,14 +105,14 @@ pub fn render_region(reg: &Registry, source: &Source, rx: i32, rz: i32, floor: i
                     rgba[idx * 4 + 3] = 255;
                 }
                 if rgba[idx * 4 + 3] == 0 && !c.sections.is_empty() {
-                    // chunk présent mais vide dans la tranche : fond sombre
+                    // chunk present but empty in the slice: dark background
                     col[idx] = [0.08, 0.08, 0.09];
                     rgba[idx * 4 + 3] = 255;
                 }
             }
         }
     }
-    // relief : ombrage par rapport au voisin nord
+    // relief: shading relative to the northern neighbor
     for z in 0..512 {
         for x in 0..512 {
             let i = z * 512 + x;

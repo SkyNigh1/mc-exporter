@@ -1,4 +1,4 @@
-//! Interface graphique (egui / eframe).
+//! Graphical user interface (egui / eframe).
 
 use crate::assets::{self, Assets, JarInfo};
 use crate::export;
@@ -233,7 +233,7 @@ impl App {
                 let jar = match jar_override {
                     Some(j) => j,
                     None => match (&world, &reuse) {
-                        // pour un schematic, on garde les ressources déjà chargées
+                        // for a schematic, keep the resources that are already loaded
                         (None, Some(r)) => r.assets.jar_path.clone(),
                         _ => {
                             assets::pick_jar(&jars, version.as_deref())
@@ -243,7 +243,7 @@ impl App {
                     },
                 };
                 let key = (jar.clone(), packs.clone());
-                // on garde le registre si le jar et les packs n'ont pas changé
+                // keep the registry if the jar and the packs did not change
                 let reg = match (reuse, prev_key) {
                     (Some(r), Some(k)) if k == key => r,
                     _ => {
@@ -728,7 +728,7 @@ impl App {
             }
         }
 
-        // tuiles
+        // tiles
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
         for ((rx, rz), t) in &self.tiles {
             let a = self.world_to_screen(rect, *rx as f64 * 512.0, *rz as f64 * 512.0);
@@ -739,7 +739,7 @@ impl App {
             }
         }
 
-        // grille des chunks
+        // chunk grid
         if self.show_chunks && self.zoom >= 1.5 {
             let tl = self.screen_to_world(rect, rect.min);
             let br = self.screen_to_world(rect, rect.max);
@@ -758,7 +758,7 @@ impl App {
             }
         }
 
-        // sélection
+        // selection
         if let Some(s) = self.sel {
             let a = self.world_to_screen(rect, s[0] as f64, s[1] as f64);
             let b = self.world_to_screen(rect, s[2] as f64 + 1.0, s[3] as f64 + 1.0);
@@ -767,7 +767,7 @@ impl App {
             painter.rect_stroke(r, 0.0, Stroke::new(1.5, Color32::from_rgb(255, 90, 60)), egui::StrokeKind::Middle);
         }
 
-        // incrustation : zoom et aide
+        // overlay: zoom and help
         let help = format!(
             "{:.2}×   clic gauche : déplacer · clic droit (ou Maj+clic) : sélectionner · molette : zoom",
             self.zoom
@@ -966,7 +966,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_jobs(&ctx);
-        // glisser-déposer d'un schematic (ou d'un dossier de monde) sur la fenêtre
+        // drag and drop of a schematic (or a world folder) onto the window
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         if let Some(p) = dropped.into_iter().next() {
             let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();

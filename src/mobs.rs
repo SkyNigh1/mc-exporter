@@ -1,4 +1,4 @@
-//! Mobs (dimensions lues dans les classes de modèles du jeu 26.x) et armures portées.
+//! Mobs (dimensions read from the game's 26.x model classes) and worn armor.
 
 use crate::bent::{COLORS, dye_diffuse, e, skin};
 use crate::pose::{ALL_FACES, Pose, Skin, bx, cube};
@@ -29,7 +29,7 @@ pub(crate) fn string(v: Option<&Value>) -> Option<String> {
     }
 }
 
-/// Superpose plusieurs textures de même taille (villageois : peau + biome + métier…)
+/// Stacks several textures of the same size (villagers: skin + biome + profession…)
 pub fn composite(reg: &Registry, layers: &[Vec<String>]) -> Option<Skin> {
     let mut found: Vec<String> = Vec::new();
     for cands in layers {
@@ -65,7 +65,7 @@ pub fn composite(reg: &Registry, layers: &[Vec<String>]) -> Option<Skin> {
     Some(Skin { tex: reg.tex_id(&name), w: base.w as f32, h: base.h as f32, tint: Tint::None })
 }
 
-/// Poses des membres d'un modèle humanoïde (décalage en pixels, rotation en radians)
+/// Limb poses of a humanoid model (offset in pixels, rotation in radians)
 #[derive(Clone, Copy)]
 pub struct Limbs {
     pub head: ([f32; 3], [f32; 3]),
@@ -93,7 +93,7 @@ fn item_id(v: &Value) -> Option<String> {
     string(get(Some(v), "id")).filter(|s| s != "air")
 }
 
-/// Objet équipé dans un emplacement (1.21.5+ : `equipment`, avant : ArmorItems / HandItems)
+/// Item equipped in a slot (1.21.5+: `equipment`, before: ArmorItems / HandItems)
 pub fn equipment<'a>(ent: &'a Value, slot: &str) -> Option<&'a Value> {
     if let Some(v) = get(get(Some(ent), "equipment"), slot) {
         return Some(v);
@@ -119,7 +119,7 @@ fn dyed_color(item: &Value) -> Option<[u8; 3]> {
     Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
 }
 
-/// Calques de texture d'une armure : (texture, teinte)
+/// Texture layers of an armor piece: (texture, tint)
 fn armor_layers_raw(reg: &Registry, item: &Value, leggings: bool) -> Vec<(Skin, ())> {
     let Some(id) = item_id(item) else { return Vec::new() };
     let mat = if id == "turtle_helmet" {
@@ -130,7 +130,7 @@ fn armor_layers_raw(reg: &Registry, item: &Value, leggings: bool) -> Vec<(Skin, 
     };
     let kind = if leggings { "humanoid_leggings" } else { "humanoid" };
     let mut out = Vec::new();
-    // format 1.21.2+ : assets/minecraft/equipment/<matériau>.json
+    // 1.21.2+ format: assets/minecraft/equipment/<material>.json
     if let Some(j) = reg.assets.json(&format!("assets/minecraft/equipment/{mat}.json")) {
         if let Some(layers) = j.get("layers").and_then(|l| l.get(kind)).and_then(|l| l.as_array()) {
             for l in layers {
@@ -152,7 +152,7 @@ fn armor_layers_raw(reg: &Registry, item: &Value, leggings: bool) -> Vec<(Skin, 
             return out;
         }
     }
-    // anciennes versions : textures/models/armor/<matériau>_layer_1.png
+    // older versions: textures/models/armor/<material>_layer_1.png
     let layer = if leggings { 2 } else { 1 };
     let name = if mat == "turtle_scute" { "turtle".to_string() } else { mat.clone() };
     let tint = if mat == "leather" { Tint::Fixed(dyed_color(item).unwrap_or([0xA0, 0x65, 0x40])) } else { Tint::None };
@@ -167,7 +167,7 @@ fn armor_layers_raw(reg: &Registry, item: &Value, leggings: bool) -> Vec<(Skin, 
     out
 }
 
-/// Armure portée sur un modèle humanoïde. `stand` : variante porte-armure (tête plus haute, jambes plus courtes).
+/// Armor worn on a humanoid model. `stand`: armor stand variant (higher head, shorter legs).
 pub fn armor(reg: &Registry, ent: &Value, base: &Pose, l: &Limbs, stand: bool, out: &mut Vec<Quad>) {
     for slot in ["head", "chest", "legs", "feet"] {
         let Some(it) = equipment(ent, slot) else { continue };
@@ -250,7 +250,7 @@ fn villager_tex(ent: &Value, root: &str) -> Vec<Vec<String>> {
     v
 }
 
-/// Mobs pris en charge ici ; renvoie false si l'identifiant n'est pas connu
+/// Mobs handled here; returns false when the id is unknown
 pub fn mob(reg: &Registry, id: &str, ent: &Value, pos: [f64; 3], yaw: f32, out: &mut Vec<Quad>) -> bool {
     let h = PI / 2.0;
     let baby = int(get(Some(ent), "Age")).unwrap_or(0) < 0 || int(get(Some(ent), "IsBaby")).unwrap_or(0) != 0;
@@ -279,7 +279,7 @@ pub fn mob(reg: &Registry, id: &str, ent: &Value, pos: [f64; 3], yaw: f32, out: 
                 l.lleg.0 = [2., 12., 0.];
             }
             if id.contains("zombie") || id == "husk" || id == "drowned" {
-                // bras tendus des zombies (AnimationUtils.animateZombieArms, au repos)
+                // outstretched zombie arms (AnimationUtils.animateZombieArms, at rest)
                 l.rarm.1 = [-PI / 2.25, 0.0, 0.0];
                 l.larm.1 = [-PI / 2.25, 0.0, 0.0];
             }
@@ -293,7 +293,7 @@ pub fn mob(reg: &Registry, id: &str, ent: &Value, pos: [f64; 3], yaw: f32, out: 
                 bx(out, &hp.part([-4.5, -6., 0.], [0., 0., PI / 6.]), &sk, (39., 6.), [-1., 0., -2.], [1., 5., 4.]);
                 let mut l2 = l;
                 l2.head = ([0., -100., 0.], [0.; 3]);
-                // corps sans la tête humanoïde
+                // body without the humanoid head
                 bx(out, &base.part(l.body.0, l.body.1), &sk, (16., 16.), [-4., 0., -2.], [8., 12., 4.]);
                 bx(out, &base.part(l.rarm.0, l.rarm.1), &sk, (40., 16.), [-3., -2., -2.], [4., 12., 4.]);
                 cube(out, &base.part(l.larm.0, l.larm.1), &sk, 40., 16., [-1., -2., -2.], [4., 12., 4.], 0.0, true, ALL_FACES);
@@ -607,7 +607,7 @@ fn armor_material(id: &str) -> String {
     if m == "golden" { "gold".into() } else { m.into() }
 }
 
-/// Image RGBA de la garniture (motif recoloré avec la palette du matériau)
+/// RGBA image of the trim (pattern recolored with the material palette)
 fn trim_image(reg: &Registry, item: &Value, leggings: bool, w: u32, h: u32) -> Option<Vec<u8>> {
     let (mat, pat) = trim_of(item)?;
     let armor_mat = armor_material(&item_id(item)?);
@@ -654,7 +654,7 @@ fn trim_image(reg: &Registry, item: &Value, leggings: bool, w: u32, h: u32) -> O
     Some(img)
 }
 
-/// Texture finale d'une pièce d'armure : calques (teintés) fusionnés + garniture
+/// Final texture of an armor piece: merged (tinted) layers + trim
 fn armor_texture(reg: &Registry, item: &Value, leggings: bool) -> Option<Skin> {
     let layers = armor_layers_raw(reg, item, leggings);
     let first = layers.first()?.0;
@@ -706,7 +706,7 @@ fn armor_texture(reg: &Registry, item: &Value, leggings: bool) -> Option<Skin> {
     Some(Skin { tex: reg.tex_id(&name), w: first.w, h: first.h, tint: Tint::None })
 }
 
-/// Objets tenus par un mob humanoïde (ItemInHandLayer)
+/// Items held by a humanoid mob (ItemInHandLayer)
 pub(crate) fn held_items(reg: &Registry, ent: &Value, base: &Pose, l: &Limbs, thin: bool, out: &mut Vec<Quad>) {
     for (slot, left) in [("mainhand", false), ("offhand", true)] {
         let Some(it) = equipment(ent, slot) else { continue };
@@ -720,7 +720,7 @@ pub(crate) fn held_items(reg: &Registry, ent: &Value, base: &Pose, l: &Limbs, th
     }
 }
 
-/// Objet tenu bras croisés (villageois, sorcière : CrossedArmsItemLayer)
+/// Item held with crossed arms (villagers, witches: CrossedArmsItemLayer)
 fn crossed_arms_item(reg: &Registry, ent: &Value, base: &Pose, out: &mut Vec<Quad>) {
     if let Some(it) = equipment(ent, "mainhand") {
         let p = base.t(0.0, 0.4, -0.4).rx(180.0);
@@ -732,7 +732,7 @@ fn variant_name(ent: &Value) -> Option<String> {
     string(get(Some(ent), "variant"))
 }
 
-/// Mobs plus rares : abeille, lama, chèvre, perroquet, axolotl, lapin, grenouille, tortue, panda, chauve-souris, dauphin
+/// Rarer mobs: bee, llama, goat, parrot, axolotl, rabbit, frog, turtle, panda, bat, dolphin
 pub fn rare_mob(reg: &Registry, id: &str, ent: &Value, pos: [f64; 3], yaw: f32, out: &mut Vec<Quad>) -> bool {
     let h = PI / 2.0;
     let baby = int(get(Some(ent), "Age")).unwrap_or(0) < 0;

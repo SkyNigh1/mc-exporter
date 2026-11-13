@@ -65,9 +65,9 @@ fn main() {
     }
 }
 
-/// Mode ligne de commande :
-///   --export <monde> <dimension> x0 z0 x1 z1 y0 y1 <sortie.obj>
-///   --map <monde> <dimension> rx rz <sortie.png>
+/// Command-line mode:
+/// --export <world> <dimension> x0 z0 x1 z1 y0 y1 <output.obj>
+/// --map <world> <dimension> rx rz <output.png>
 fn cli(a: &[String]) -> anyhow::Result<()> {
     let t0 = std::time::Instant::now();
     let wpath = PathBuf::from(&a[1]);

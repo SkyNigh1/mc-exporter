@@ -1,5 +1,5 @@
-//! Registre des états de blocs, des biomes et des textures, et résolution des modèles
-//! de blocs (blockstates + models JSON du jeu) en quads.
+//! Registry of block states, biomes and textures, and resolution of block models
+//! (the game's blockstates + model JSON) into quads.
 
 use crate::assets::{Assets, BiomeColors};
 use serde_json::Value;
@@ -79,11 +79,11 @@ impl Tint {
     }
 }
 
-/// Quad d'un bloc, coordonnées locales dans [0,1]³. Sommets dans l'ordre anti-horaire vu de l'extérieur.
+/// Block quad, local coordinates in [0,1]³. Vertices in counter-clockwise order seen from outside.
 #[derive(Clone, Debug)]
 pub struct Quad {
     pub pos: [[f32; 3]; 4],
-    pub uv: [[f32; 2]; 4], // convention OBJ (v vers le haut)
+    pub uv: [[f32; 2]; 4], // OBJ convention (v points up)
     pub tex: u32,
     pub tint: Tint,
     pub cull: Option<Dir>,
@@ -100,7 +100,7 @@ pub enum Fluid {
 
 pub struct BlockGeom {
     pub name: String,
-    /// Pour chaque partie, des variantes pondérées (poids, quads)
+    /// For each part, weighted variants (weight, quads)
     pub parts: Vec<Vec<(u32, Vec<Quad>)>>,
     pub occludes: [bool; 6],
     pub map_tex: Option<u32>,
@@ -110,9 +110,9 @@ pub struct BlockGeom {
     pub unknown: bool,
     pub same_cull: bool,
     pub air: bool,
-    /// rendu spécial (coffre, bannière, panneau…)
+    /// special rendering (chest, banner, sign…)
     pub be: bool,
-    /// le jar fournit une géométrie pour ce bloc
+    /// the jar provides geometry for this block
     pub has_model: bool,
 }
 
@@ -231,7 +231,7 @@ fn arr3(v: Option<&Value>) -> Option<[f32; 3]> {
     Some([a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32, a.get(2)?.as_f64()? as f32])
 }
 
-/// UV « canonique » (projection monde) pour une direction, à partir d'une position locale.
+/// "Canonical" UV (world projection) for a direction, from a local position.
 pub fn canonical_uv(d: Dir, p: [f32; 3]) -> [f32; 2] {
     match d {
         Dir::Up => [p[0], 1.0 - p[2]],
@@ -284,7 +284,7 @@ impl Registry {
             models: RwLock::new(HashMap::new()),
             font: std::sync::OnceLock::new(),
         };
-        // id 0 = air, biome 0 = plaines
+        // id 0 = air, biome 0 = plains
         r.state_id("minecraft:air", Vec::new());
         r.biome_id("minecraft:plains");
         r
@@ -446,8 +446,8 @@ impl Registry {
         Some(ResolvedModel { textures, elements, display, generated })
     }
 
-    /// Transformation d'affichage d'un modèle pour un contexte (fixed, ground, gui…) :
-    /// (rotation en degrés, translation en blocs, échelle)
+    /// Display transform of a model for a context (fixed, ground, gui…):
+    /// (rotation in degrees, translation in blocks, scale)
     pub fn model_display(&self, model_id: &str, ctx: &str) -> Option<[[f32; 3]; 3]> {
         let m = self.model(model_id)?;
         let d = m.display.get(ctx)?;
@@ -464,7 +464,7 @@ impl Registry {
         Some([a("rotation", 0.0), t, a("scale", 1.0).map(|x| x.clamp(-4.0, 4.0))])
     }
 
-    /// Le modèle est-il une image plate générée (item/generated) ? Renvoie ses calques.
+    /// Is the model a generated flat sprite (item/generated)? Returns its layers.
     pub fn model_layers(&self, model_id: &str) -> Option<Vec<String>> {
         let m = self.model(model_id)?;
         if !m.elements.is_empty() {
@@ -480,18 +480,19 @@ impl Registry {
         if v.is_empty() && !m.generated { None } else { Some(v) }
     }
 
-    /// Quads d'un modèle quelconque (sans rotation de variante)
-    /// Quads d'un modèle d'objet, avec la teinte du bloc correspondant (herbe, feuilles…)
+    /// Quads of an item model, tinted like the matching block (grass, leaves…)
     pub fn item_geometry(&self, model_id: &str, item_id: &str) -> Vec<Quad> {
         let key = StateKey { name: item_id.to_string(), props: Vec::new() };
         self.model_quads(model_id, 0, 0, false, tint_for(item_id, &key))
     }
 
+    /// Quads of any model (no variant rotation)
+
     pub fn model_geometry(&self, model_id: &str) -> Vec<Quad> {
         self.model_quads(model_id, 0, 0, false, Tint::None)
     }
 
-    /// Quads de la première variante d'un état de bloc
+    /// Quads of the first variant of a block state
     pub fn state_quads(&self, id: u32) -> Vec<Quad> {
         let g = self.geom(id);
         g.parts.iter().filter_map(|p| p.first()).flat_map(|(_, q)| q.iter().cloned()).collect()
@@ -510,7 +511,7 @@ impl Registry {
         None
     }
 
-    /// Construit les quads d'un modèle avec la rotation de variante (x, y) et uvlock.
+    /// Builds the quads of a model with the variant rotation (x, y) and uvlock.
     fn model_quads(&self, model_id: &str, vx: i32, vy: i32, uvlock: bool, tint: Tint) -> Vec<Quad> {
         let Some(m) = self.model(model_id) else { return Vec::new() };
         let vrot = mat_mul(&rot('y', -vy as f32), &rot('x', -vx as f32));
@@ -519,7 +520,7 @@ impl Registry {
         for e in &m.elements {
             let (Some(f), Some(t)) = (arr3(e.get("from")), arr3(e.get("to"))) else { continue };
             let flat = (0..3).any(|i| (f[i] - t[i]).abs() < 1e-4);
-            // rotation d'élément
+            // element rotation
             let mut erot: Option<(M3, [f32; 3], [f32; 3])> = None;
             if let Some(r) = e.get("rotation") {
                 let origin = arr3(r.get("origin")).unwrap_or([8.0, 8.0, 8.0]);
@@ -570,7 +571,7 @@ impl Registry {
                         Dir::West => [z1, 16.0 - y2, z2, 16.0 - y1],
                         Dir::East => [16.0 - z2, 16.0 - y2, 16.0 - z1, 16.0 - y1],
                     });
-                // coins TL, TR, BR, BL vus de l'extérieur
+                // corners TL, TR, BR, BL seen from outside
                 let c: [[f32; 3]; 4] = match fd {
                     Dir::Down => [[x1, y1, z2], [x2, y1, z2], [x2, y1, z1], [x1, y1, z1]],
                     Dir::Up => [[x1, y2, z1], [x2, y2, z1], [x2, y2, z2], [x1, y2, z2]],
@@ -583,7 +584,7 @@ impl Registry {
                 let k = ((face.get("rotation").and_then(|v| v.as_i64()).unwrap_or(0) / 90).rem_euclid(4)) as usize;
                 let mut pos = [[0f32; 3]; 4];
                 let mut uv = [[0f32; 2]; 4];
-                // ordre de sortie anti-horaire : BL, BR, TR, TL
+                // counter-clockwise output order: BL, BR, TR, TL
                 for (o, i) in [3usize, 2, 1, 0].iter().enumerate() {
                     let mut p = c[*i];
                     if let Some((m3, org, sc)) = &erot {
@@ -670,7 +671,7 @@ impl Registry {
         let tint = tint_for(&name, key);
         let (ns, p) = name.split_once(':').unwrap_or(("minecraft", &name));
         let bs_json = self.assets.json(&format!("assets/{ns}/blockstates/{p}.json")).or_else(|| {
-            // blocs renommés entre les versions
+            // blocks renamed between versions
             let alt = match p {
                 "grass" => "short_grass",
                 "short_grass" => "grass",
@@ -720,7 +721,7 @@ impl Registry {
             }
         }
         g.has_model = g.parts.iter().any(|p| p.first().map(|(_, q)| !q.is_empty()).unwrap_or(false));
-        // occlusion et couleur de carte, d'après la première variante de chaque partie
+        // occlusion and map color, from the first variant of each part
         let mut best_up: Option<(f32, u32, Tint)> = None;
         let mut any: Option<(u32, Tint)> = None;
         for part in &g.parts {
@@ -752,7 +753,7 @@ impl Registry {
             g.map_tex = Some(t);
             g.map_tint = ti;
         }
-        // blocs sans géométrie (coffres, bannières…) : texture « particle » du modèle pour la carte 2D
+        // blocks without geometry (chests, banners…): the model's "particle" texture for the 2D map
         if g.map_tex.is_none() && !matches!(n.as_str(), "barrier" | "light" | "structure_void" | "moving_piston") {
             if let Some(bs) = self.assets.json(&format!("assets/{ns}/blockstates/{p}.json")) {
                 let first_model = |v: &Value| -> Option<String> {
@@ -783,7 +784,7 @@ impl Registry {
     }
 }
 
-/// Le quad couvre-t-il entièrement la face `d` du cube unité ?
+/// Does the quad fully cover face `d` of the unit cube?
 fn covers_side(q: &Quad, d: Dir) -> bool {
     let (axis, val) = match d {
         Dir::Down => (1, 0.0),
